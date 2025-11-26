@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.HeartRateMonitor" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Primary brand color -->
+        <item name="colorPrimary">#FF4444</item>
+        <item name="colorPrimaryDark">#CC0000</item>
+        <item name="colorAccent">#FF4444</item>
+        
+        <!-- Status bar color -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        
+        <!-- Background color -->
+        <item name="android:windowBackground">#1A1A1A</item>
+    </style>
+</resources>
+
