@@ -33,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var heartIcon: TextView
     private lateinit var pulseIndicator: View
     private lateinit var pulseDot: View
+    private lateinit var muteButton: TextView
     
     private lateinit var cameraExecutor: ExecutorService
     private var camera: Camera? = null
@@ -44,6 +45,7 @@ class MainActivity : AppCompatActivity() {
     private var toneGenerator: ToneGenerator? = null
     private var lastHeartbeatTime = 0L
     private val MIN_HEARTBEAT_INTERVAL = 300L  // Minimum 300ms between heartbeats (max 200 BPM)
+    private var isSoundMuted = false
     
     // Heart rate detection variables
     private val redValues = mutableListOf<Float>()
@@ -59,6 +61,10 @@ class MainActivity : AppCompatActivity() {
     private var sustainedFingerContact = 0
     private val SUSTAINED_THRESHOLD = 30  // Need 30 consecutive changed frames (~1 second)
     private var isFingerCurrentlyOnCamera = false
+    
+    // Interruption detection (to prevent false cancellations)
+    private var consecutiveFingerOffFrames = 0
+    private val FINGER_OFF_THRESHOLD = 30  // Need 30 consecutive frames (~1 second) to confirm finger is really off
     
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var pulseAnimationJob: Job? = null
@@ -78,8 +84,15 @@ class MainActivity : AppCompatActivity() {
         heartIcon = findViewById(R.id.heartIcon)
         pulseIndicator = findViewById(R.id.pulseIndicator)
         pulseDot = findViewById(R.id.pulseDot)
+        muteButton = findViewById(R.id.muteButton)
         
         cameraExecutor = Executors.newSingleThreadExecutor()
+        
+        // Mute button click listener
+        muteButton.setOnClickListener {
+            isSoundMuted = !isSoundMuted
+            muteButton.text = if (isSoundMuted) "🔇" else "🔊"
+        }
         
         // Initialize sound generator
         try {
@@ -127,6 +140,7 @@ class MainActivity : AppCompatActivity() {
         isFingerDetected = false
         sustainedFingerContact = 0
         isFingerCurrentlyOnCamera = false
+        consecutiveFingerOffFrames = 0  // Reset interruption counter
         
         // Don't change status text here - let the caller set appropriate message
         
@@ -158,6 +172,44 @@ class MainActivity : AppCompatActivity() {
                 delay(400)
             }
         }
+    }
+    
+    private fun calculatePartialHeartRate(): Int? {
+        // Calculate heart rate from partial data
+        if (redValues.size < 30) {
+            // Not enough data even for partial reading
+            return null
+        }
+        
+        val smoothedValues = smoothSignal(redValues)
+        val peaks = detectPeaks(smoothedValues)
+        
+        if (peaks.size >= 2) {
+            val intervals = mutableListOf<Float>()
+            for (i in 1 until peaks.size) {
+                val interval = (peaks[i] - peaks[i-1]).toFloat()
+                if (interval > 10 && interval < 90) {
+                    intervals.add(interval)
+                }
+            }
+            
+            if (intervals.isNotEmpty()) {
+                intervals.sort()
+                val medianInterval = if (intervals.size % 2 == 0) {
+                    (intervals[intervals.size / 2 - 1] + intervals[intervals.size / 2]) / 2
+                } else {
+                    intervals[intervals.size / 2]
+                }
+                
+                val partialHeartRate = (60.0f * FRAMES_PER_SECOND / medianInterval).toInt()
+                
+                if (partialHeartRate in 45..180) {
+                    return partialHeartRate
+                }
+            }
+        }
+        
+        return null
     }
     
     private fun calculateHeartRate() {
@@ -471,18 +523,31 @@ class MainActivity : AppCompatActivity() {
                 redValues.add(avgIntensity)
                 frameCount++
                 
-                // Detect heartbeat for sound (simple threshold crossing)
-                if (redValues.size > 10) {
-                    val recent = redValues.takeLast(5).average().toFloat()
-                    val previous = redValues.takeLast(10).take(5).average().toFloat()
+                // Detect heartbeat for sound and animation during measurement
+                if (redValues.size > 20) {
                     val currentTime = System.currentTimeMillis()
                     
-                    // If intensity increased significantly (peak detected) and enough time has passed
-                    if (recent > previous + 3 && currentTime - lastHeartbeatTime > MIN_HEARTBEAT_INTERVAL) {
+                    // More sophisticated peak detection for real-time feedback
+                    // Look at recent trend vs previous trend
+                    val veryRecent = redValues.takeLast(3).average().toFloat()
+                    val recent = redValues.takeLast(10).average().toFloat()
+                    val older = if (redValues.size >= 20) {
+                        redValues.takeLast(20).take(10).average().toFloat()
+                    } else {
+                        redValues.take(redValues.size / 2).average().toFloat()
+                    }
+                    
+                    // Detect upward trend (blood volume increasing)
+                    // Much more sensitive threshold for real-time detection
+                    val isRising = veryRecent > recent && recent > older
+                    val significantChange = abs(veryRecent - older) > 1.5f  // Lower threshold for better sensitivity
+                    
+                    // If we detect an upward peak and enough time has passed since last beat
+                    if (isRising && significantChange && currentTime - lastHeartbeatTime > MIN_HEARTBEAT_INTERVAL) {
                         lastHeartbeatTime = currentTime
-                        // Play heartbeat sound on main thread
+                        // Synchronize sound and animation - call together on main thread
                         runOnUiThread {
-                            playHeartbeatSound()
+                            onHeartbeatDetected()  // Single function for synchronized effects
                         }
                     }
                 }
@@ -495,13 +560,32 @@ class MainActivity : AppCompatActivity() {
                 
                 // Don't cancel if we're close to completion (>80%)
                 if (progress < 80) {
-                    // Check if finger removed (brightness returns to baseline)
+                    // Check if finger removed (brightness returns close to baseline)
+                    // Use more lenient threshold and require sustained removal to avoid false cancellations
                     val currentDiff = abs(avgIntensity - baselineBrightness)
-                    if (currentDiff < 15) {
-                        runOnUiThread {
-                            statusText.text = "Finger removed. Place finger again."
-                            stopMeasuring()
+                    
+                    if (currentDiff < 10) {
+                        // Brightness is close to baseline - might be finger removal
+                        consecutiveFingerOffFrames++
+                        
+                        // Only cancel after sustained removal (1 second of frames)
+                        if (consecutiveFingerOffFrames >= FINGER_OFF_THRESHOLD) {
+                            // Calculate partial heart rate before canceling
+                            val partialReading = calculatePartialHeartRate()
+                            runOnUiThread {
+                                if (partialReading != null) {
+                                    heartRateText.text = "~$partialReading"
+                                    statusText.text = "Interrupted! Partial: ~$partialReading BPM | Place finger to retry"
+                                } else {
+                                    statusText.text = "Interrupted. Not enough data. Place finger again."
+                                }
+                                stopMeasuring()
+                            }
+                            consecutiveFingerOffFrames = 0
                         }
+                    } else {
+                        // Finger is still on camera, reset counter
+                        consecutiveFingerOffFrames = 0
                     }
                 }
             }
@@ -529,7 +613,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    private fun onHeartbeatDetected() {
+        // Synchronized heartbeat effects - sound + animation together
+        playHeartbeatSound()
+        animateHeartPulse()
+    }
+    
     private fun playHeartbeatSound() {
+        if (isSoundMuted) return
+        
         try {
             // Play a short beep tone (similar to medical devices)
             // Using DTMF tone 'C' which sounds like a medical beep
@@ -537,6 +629,44 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             // Ignore if sound fails
         }
+    }
+    
+    private fun animateHeartPulse() {
+        // Animate both color AND scale for dramatic, synchronized effect with sound
+        // Duration matches the beep sound (50ms beep + 150ms fade = 200ms total)
+        val colorAnimator = android.animation.ValueAnimator.ofFloat(0f, 1f, 0f)
+        colorAnimator.duration = 200  // Synchronized with sound timing
+        
+        colorAnimator.addUpdateListener { animator ->
+            val fraction = animator.animatedValue as Float
+            
+            // Very dramatic color change for clear visibility
+            // Start: #FF6B6B (bright red), Peak: #8B0000 (dark red)
+            val startColor = 0xFF6B6B
+            val peakColor = 0x8B0000
+            
+            val r1 = (startColor shr 16) and 0xFF
+            val g1 = (startColor shr 8) and 0xFF
+            val b1 = startColor and 0xFF
+            
+            val r2 = (peakColor shr 16) and 0xFF
+            val g2 = (peakColor shr 8) and 0xFF
+            val b2 = peakColor and 0xFF
+            
+            val r = (r1 + (r2 - r1) * fraction).toInt()
+            val g = (g1 + (g2 - g1) * fraction).toInt()
+            val b = (b1 + (b2 - b1) * fraction).toInt()
+            
+            val color = android.graphics.Color.rgb(r, g, b)
+            heartIcon.setTextColor(color)
+            
+            // Pulse the scale - quick expansion and contraction
+            val scale = 1f + (fraction * 0.2f)  // Scale up to 20% bigger for more visible effect
+            heartIcon.scaleX = scale
+            heartIcon.scaleY = scale
+        }
+        
+        colorAnimator.start()
     }
     
     override fun onDestroy() {
