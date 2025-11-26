@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.media.ToneGenerator
+import android.media.AudioManager
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
@@ -37,6 +39,11 @@ class MainActivity : AppCompatActivity() {
     private var isFlashOn = false
     private var isMeasuring = false
     private var isFingerDetected = false
+    
+    // Sound effects
+    private var toneGenerator: ToneGenerator? = null
+    private var lastHeartbeatTime = 0L
+    private val MIN_HEARTBEAT_INTERVAL = 300L  // Minimum 300ms between heartbeats (max 200 BPM)
     
     // Heart rate detection variables
     private val redValues = mutableListOf<Float>()
@@ -74,6 +81,13 @@ class MainActivity : AppCompatActivity() {
         
         cameraExecutor = Executors.newSingleThreadExecutor()
         
+        // Initialize sound generator
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 50)  // 50% volume
+        } catch (e: Exception) {
+            // Tone generator may fail on some devices
+        }
+        
         if (allPermissionsGranted()) {
             startCamera()
         } else {
@@ -89,7 +103,7 @@ class MainActivity : AppCompatActivity() {
         isMeasuring = true
         redValues.clear()
         frameCount = 0
-        heartRateText.text = "--"
+        // Don't clear heart rate text - keep previous reading until new one is ready
         statusText.text = "Measuring... Keep your finger steady"
         
         // Turn on flash
@@ -457,6 +471,22 @@ class MainActivity : AppCompatActivity() {
                 redValues.add(avgIntensity)
                 frameCount++
                 
+                // Detect heartbeat for sound (simple threshold crossing)
+                if (redValues.size > 10) {
+                    val recent = redValues.takeLast(5).average().toFloat()
+                    val previous = redValues.takeLast(10).take(5).average().toFloat()
+                    val currentTime = System.currentTimeMillis()
+                    
+                    // If intensity increased significantly (peak detected) and enough time has passed
+                    if (recent > previous + 3 && currentTime - lastHeartbeatTime > MIN_HEARTBEAT_INTERVAL) {
+                        lastHeartbeatTime = currentTime
+                        // Play heartbeat sound on main thread
+                        runOnUiThread {
+                            playHeartbeatSound()
+                        }
+                    }
+                }
+                
                 // Update progress
                 val progress = (frameCount * 100 / REQUIRED_FRAMES)
                 runOnUiThread {
@@ -499,11 +529,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    private fun playHeartbeatSound() {
+        try {
+            // Play a short beep tone (similar to medical devices)
+            // Using DTMF tone 'C' which sounds like a medical beep
+            toneGenerator?.startTone(ToneGenerator.TONE_DTMF_C, 50)  // 50ms duration
+        } catch (e: Exception) {
+            // Ignore if sound fails
+        }
+    }
+    
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
         pulseAnimationJob?.cancel()
         mainScope.cancel()
+        toneGenerator?.release()
         camera?.cameraControl?.enableTorch(false)
     }
 }

@@ -6,16 +6,6 @@
     android:layout_height="match_parent"
     android:background="#1A1A1A">
 
-    <!-- Camera Preview (hidden, used for analysis) -->
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
-        android:layout_width="100dp"
-        android:layout_height="100dp"
-        android:layout_margin="16dp"
-        android:layout_marginTop="60dp"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
-
     <!-- Title -->
     <TextView
         android:id="@+id/titleText"
@@ -25,9 +15,19 @@
         android:textSize="28sp"
         android:textColor="#FFFFFF"
         android:textStyle="bold"
-        android:layout_marginTop="80dp"
+        android:layout_marginTop="40dp"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Camera Preview (below title) -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="100dp"
+        android:layout_height="100dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="16dp"
+        app:layout_constraintTop_toBottomOf="@id/titleText"
         app:layout_constraintEnd_toEndOf="parent" />
 
     <!-- Heart Icon Circle -->
