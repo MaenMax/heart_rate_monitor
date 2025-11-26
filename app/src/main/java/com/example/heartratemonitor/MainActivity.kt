@@ -595,28 +595,25 @@ class MainActivity : AppCompatActivity() {
                 redValues.add(avgIntensity)
                 frameCount++
                 
-                // CRITICAL: Detect heartbeat for sound and animation during measurement
-                if (redValues.size >= 20) {
+                // CRITICAL: Detect heartbeat for sound and animation - FAST response!
+                if (redValues.size >= 8) {
                     val currentTime = System.currentTimeMillis()
                     
-                    // Detect actual peaks (local maxima) for accurate heartbeat detection
-                    val last5 = redValues.takeLast(5).average().toFloat()
-                    val last10 = redValues.takeLast(10).average().toFloat()
-                    val last15 = if (redValues.size >= 15) {
-                        redValues.takeLast(15).average().toFloat()
-                    } else {
-                        redValues.average().toFloat()
-                    }
+                    // Use smaller windows for faster response (reduces lag)
+                    val current = redValues.last()  // Most recent frame
+                    val last2 = redValues.takeLast(2).average().toFloat()
+                    val last4 = redValues.takeLast(4).average().toFloat()
+                    val last8 = redValues.takeLast(8).average().toFloat()
                     
-                    // Detect peak: recent values are higher than both before and after
-                    // This ensures we only trigger on actual peaks, not random increases
-                    val isPeak = last5 > last10 && last10 < last15
-                    val peakStrength = abs(last5 - last15)
+                    // Detect peak: current values higher than recent past
+                    // Immediate response to brightness increase
+                    val isPeak = current > last2 && last2 > last4
+                    val strength = abs(current - last8)
                     
-                    // Trigger only on significant peaks with proper timing
-                    if (isPeak && peakStrength > 1.5f && currentTime - lastHeartbeatTime > MIN_HEARTBEAT_INTERVAL) {
+                    // Trigger on peaks with minimal delay
+                    if (isPeak && strength > 1.0f && currentTime - lastHeartbeatTime > MIN_HEARTBEAT_INTERVAL) {
                         lastHeartbeatTime = currentTime
-                        // ALWAYS trigger sound and animation on detected heartbeat
+                        // IMMEDIATE trigger - sound and animation
                         runOnUiThread {
                             onHeartbeatDetected()
                         }
