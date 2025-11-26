@@ -4,12 +4,14 @@ import android.Manifest
 import android.animation.ObjectAnimator
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
+import android.graphics.Outline
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.ToneGenerator
 import android.media.AudioManager
 import android.os.Bundle
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -44,7 +46,7 @@ class MainActivity : AppCompatActivity() {
     // Sound effects
     private var toneGenerator: ToneGenerator? = null
     private var lastHeartbeatTime = 0L
-    private val MIN_HEARTBEAT_INTERVAL = 300L  // Minimum 300ms between heartbeats (max 200 BPM)
+    private val MIN_HEARTBEAT_INTERVAL = 500L  // Minimum 500ms between heartbeats (max 120 BPM) - prevent rapid firing
     private var isSoundMuted = false
     
     // Heart rate detection variables
@@ -64,7 +66,7 @@ class MainActivity : AppCompatActivity() {
     
     // Interruption detection (to prevent false cancellations)
     private var consecutiveFingerOffFrames = 0
-    private val FINGER_OFF_THRESHOLD = 30  // Need 30 consecutive frames (~1 second) to confirm finger is really off
+    private val FINGER_OFF_THRESHOLD = 10  // Need 10 consecutive frames (~0.3 second) to confirm finger is really off
     
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var pulseAnimationJob: Job? = null
@@ -88,17 +90,30 @@ class MainActivity : AppCompatActivity() {
         
         cameraExecutor = Executors.newSingleThreadExecutor()
         
+        // Make camera preview circular
+        previewView.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setOval(0, 0, view.width, view.height)
+            }
+        }
+        previewView.clipToOutline = true
+        
         // Mute button click listener
         muteButton.setOnClickListener {
             isSoundMuted = !isSoundMuted
             muteButton.text = if (isSoundMuted) "🔇" else "🔊"
         }
         
-        // Initialize sound generator
+        // Initialize sound generator with higher volume
         try {
-            toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 50)  // 50% volume
+            toneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90)  // 90% volume, notification stream
         } catch (e: Exception) {
-            // Tone generator may fail on some devices
+            // Try alternative stream if it fails
+            try {
+                toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 90)
+            } catch (e2: Exception) {
+                Toast.makeText(this, "Sound may not work on this device", Toast.LENGTH_SHORT).show()
+            }
         }
         
         if (allPermissionsGranted()) {
@@ -174,6 +189,40 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    private fun calculateRealtimeHeartRate(): Int? {
+        // Calculate real-time heart rate from current data
+        if (redValues.size < 90) return null
+        
+        val smoothedValues = smoothSignal(redValues)
+        val peaks = detectPeaks(smoothedValues)
+        
+        if (peaks.size >= 3) {
+            val intervals = mutableListOf<Float>()
+            for (i in 1 until peaks.size) {
+                val interval = (peaks[i] - peaks[i-1]).toFloat()
+                if (interval > 10 && interval < 90) {
+                    intervals.add(interval)
+                }
+            }
+            
+            if (intervals.size >= 2) {
+                intervals.sort()
+                val medianInterval = if (intervals.size % 2 == 0) {
+                    (intervals[intervals.size / 2 - 1] + intervals[intervals.size / 2]) / 2
+                } else {
+                    intervals[intervals.size / 2]
+                }
+                
+                val heartRate = (60.0f * FRAMES_PER_SECOND / medianInterval).toInt()
+                if (heartRate in 45..180) {
+                    return heartRate
+                }
+            }
+        }
+        
+        return null
+    }
+    
     private fun calculatePartialHeartRate(): Int? {
         // Calculate heart rate from partial data
         if (redValues.size < 30) {
@@ -213,11 +262,18 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun calculateHeartRate() {
-        if (redValues.size < 150) {
-            statusText.text = "Not enough data. Place finger again."
-            heartRateText.text = "--"
+        // ALWAYS try to calculate and show heart rate - even with less data
+        if (redValues.size < 90) {
+            // Try partial calculation
+            val partialHR = calculatePartialHeartRate()
+            if (partialHR != null) {
+                heartRateText.text = partialHR.toString()
+                statusText.text = "✓ Heart rate: $partialHR BPM (short measurement)"
+            } else {
+                statusText.text = "Not enough data. Place finger again."
+                heartRateText.text = "--"
+            }
             stopMeasuring()
-            // Don't clear brightness readings - keep baseline
             return
         }
         
@@ -227,31 +283,44 @@ class MainActivity : AppCompatActivity() {
         // Calculate heart rate using peak detection
         val peaks = detectPeaks(smoothedValues)
         
-        if (peaks.size < 4) {
-            statusText.text = "Could not detect heartbeat. Try again."
-            heartRateText.text = "--"
+        if (peaks.size < 3) {
+            // Still try to calculate something
+            val partialHR = calculatePartialHeartRate()
+            if (partialHR != null) {
+                heartRateText.text = partialHR.toString()
+                statusText.text = "✓ Heart rate: $partialHR BPM (low confidence)"
+            } else {
+                statusText.text = "Could not detect heartbeat. Try again."
+                heartRateText.text = "--"
+            }
             stopMeasuring()
             return
         }
         
-        // Calculate intervals between peaks (ignore first interval as it may be partial)
+        // Calculate intervals between peaks
         val intervals = mutableListOf<Float>()
         for (i in 1 until peaks.size) {
             val interval = (peaks[i] - peaks[i-1]).toFloat()
             // Filter out unrealistic intervals
-            if (interval > 10 && interval < 90) {  // Between 40-180 BPM
+            if (interval > 10 && interval < 90) {
                 intervals.add(interval)
             }
         }
         
         if (intervals.isEmpty()) {
-            statusText.text = "Could not detect consistent heartbeat."
-            heartRateText.text = "--"
+            val partialHR = calculatePartialHeartRate()
+            if (partialHR != null) {
+                heartRateText.text = partialHR.toString()
+                statusText.text = "✓ Heart rate: $partialHR BPM"
+            } else {
+                statusText.text = "Could not detect consistent heartbeat."
+                heartRateText.text = "--"
+            }
             stopMeasuring()
             return
         }
         
-        // Use median instead of average for better outlier resistance
+        // Use median for accuracy
         intervals.sort()
         val medianInterval = if (intervals.size % 2 == 0) {
             (intervals[intervals.size / 2 - 1] + intervals[intervals.size / 2]) / 2
@@ -261,18 +330,21 @@ class MainActivity : AppCompatActivity() {
         
         val heartRate = (60.0f * FRAMES_PER_SECOND / medianInterval).toInt()
         
-        // Validate heart rate is in reasonable range
+        // ALWAYS SHOW THE NUMBER - even if outside ideal range
         if (heartRate in 45..180) {
             heartRateText.text = heartRate.toString()
             statusText.text = "✓ Heart rate: $heartRate BPM | Remove finger or measure again"
             animateHeartbeat()
+        } else if (heartRate in 30..220) {
+            // Still show it but warn user
+            heartRateText.text = heartRate.toString()
+            statusText.text = "⚠ Heart rate: $heartRate BPM (unusual, please retry)"
         } else {
             heartRateText.text = "--"
             statusText.text = "Invalid reading: $heartRate BPM out of range."
         }
         
         stopMeasuring()
-        // Don't clear baseline - keep it for next measurement
     }
     
     private fun smoothSignal(signal: List<Float>): List<Float> {
@@ -523,31 +595,41 @@ class MainActivity : AppCompatActivity() {
                 redValues.add(avgIntensity)
                 frameCount++
                 
-                // Detect heartbeat for sound and animation during measurement
-                if (redValues.size > 20) {
+                // CRITICAL: Detect heartbeat for sound and animation during measurement
+                if (redValues.size >= 20) {
                     val currentTime = System.currentTimeMillis()
                     
-                    // More sophisticated peak detection for real-time feedback
-                    // Look at recent trend vs previous trend
-                    val veryRecent = redValues.takeLast(3).average().toFloat()
-                    val recent = redValues.takeLast(10).average().toFloat()
-                    val older = if (redValues.size >= 20) {
-                        redValues.takeLast(20).take(10).average().toFloat()
+                    // Detect actual peaks (local maxima) for accurate heartbeat detection
+                    val last5 = redValues.takeLast(5).average().toFloat()
+                    val last10 = redValues.takeLast(10).average().toFloat()
+                    val last15 = if (redValues.size >= 15) {
+                        redValues.takeLast(15).average().toFloat()
                     } else {
-                        redValues.take(redValues.size / 2).average().toFloat()
+                        redValues.average().toFloat()
                     }
                     
-                    // Detect upward trend (blood volume increasing)
-                    // Much more sensitive threshold for real-time detection
-                    val isRising = veryRecent > recent && recent > older
-                    val significantChange = abs(veryRecent - older) > 1.5f  // Lower threshold for better sensitivity
+                    // Detect peak: recent values are higher than both before and after
+                    // This ensures we only trigger on actual peaks, not random increases
+                    val isPeak = last5 > last10 && last10 < last15
+                    val peakStrength = abs(last5 - last15)
                     
-                    // If we detect an upward peak and enough time has passed since last beat
-                    if (isRising && significantChange && currentTime - lastHeartbeatTime > MIN_HEARTBEAT_INTERVAL) {
+                    // Trigger only on significant peaks with proper timing
+                    if (isPeak && peakStrength > 1.5f && currentTime - lastHeartbeatTime > MIN_HEARTBEAT_INTERVAL) {
                         lastHeartbeatTime = currentTime
-                        // Synchronize sound and animation - call together on main thread
+                        // ALWAYS trigger sound and animation on detected heartbeat
                         runOnUiThread {
-                            onHeartbeatDetected()  // Single function for synchronized effects
+                            onHeartbeatDetected()
+                        }
+                    }
+                }
+                
+                // REAL-TIME HEART RATE DISPLAY - Update frequently!
+                // Show heart rate as soon as we have enough data and keep updating
+                if (frameCount >= 90 && frameCount % 30 == 0) {  // Every second after 3 seconds
+                    val currentHR = calculateRealtimeHeartRate()
+                    if (currentHR != null) {
+                        runOnUiThread {
+                            heartRateText.text = currentHR.toString()
                         }
                     }
                 }
@@ -623,11 +705,20 @@ class MainActivity : AppCompatActivity() {
         if (isSoundMuted) return
         
         try {
+            // Force stop any previous tone
+            toneGenerator?.stopTone()
             // Play a short beep tone (similar to medical devices)
-            // Using DTMF tone 'C' which sounds like a medical beep
-            toneGenerator?.startTone(ToneGenerator.TONE_DTMF_C, 50)  // 50ms duration
+            // Using DTMF tone '8' which is a higher pitch beep
+            toneGenerator?.startTone(ToneGenerator.TONE_DTMF_8, 80)  // 80ms duration, louder
         } catch (e: Exception) {
-            // Ignore if sound fails
+            // If tone generator fails, try to recreate it
+            try {
+                toneGenerator?.release()
+                toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 80)  // 80% volume
+                toneGenerator?.startTone(ToneGenerator.TONE_DTMF_8, 80)
+            } catch (e2: Exception) {
+                // Sound completely failed
+            }
         }
     }
     

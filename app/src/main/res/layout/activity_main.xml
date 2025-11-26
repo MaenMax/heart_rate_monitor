@@ -4,69 +4,111 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#1A1A1A">
+    android:background="@drawable/gradient_background">
 
-    <!-- Title -->
-    <TextView
-        android:id="@+id/titleText"
+    <!-- Title with gradient effect -->
+    <LinearLayout
+        android:id="@+id/titleContainer"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Heart Rate Monitor"
-        android:textSize="28sp"
-        android:textColor="#FFFFFF"
-        android:textStyle="bold"
-        android:layout_marginTop="40dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:layout_marginTop="48dp"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
+        app:layout_constraintEnd_toEndOf="parent">
+        
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="❤️ HEART RATE"
+            android:textSize="26sp"
+            android:textColor="#FF5555"
+            android:textStyle="bold"
+            android:letterSpacing="0.08"
+            android:shadowColor="#FF0000"
+            android:shadowDx="0"
+            android:shadowDy="0"
+            android:shadowRadius="6" />
+        
+        <TextView
+            android:id="@+id/titleText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="MONITOR"
+            android:textSize="20sp"
+            android:textColor="#AAAAAA"
+            android:textStyle="normal"
+            android:letterSpacing="0.15"
+            android:layout_marginTop="2dp"
+            android:fontFamily="sans-serif-light" />
+        
+        <View
+            android:layout_width="80dp"
+            android:layout_height="2dp"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/title_underline" />
+    </LinearLayout>
     
     <!-- Speaker/Mute Button -->
-    <TextView
-        android:id="@+id/muteButton"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:text="🔊"
-        android:textSize="28sp"
-        android:gravity="center"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        android:layout_marginStart="16dp"
-        android:layout_marginTop="8dp"
-        app:layout_constraintTop_toBottomOf="@id/titleText"
-        app:layout_constraintStart_toStartOf="parent" />
+    <FrameLayout
+        android:layout_width="52dp"
+        android:layout_height="52dp"
+        android:background="@drawable/icon_button_background"
+        android:elevation="4dp"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="12dp"
+        app:layout_constraintTop_toBottomOf="@id/titleContainer"
+        app:layout_constraintStart_toStartOf="parent">
+        
+        <TextView
+            android:id="@+id/muteButton"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:text="🔊"
+            android:textSize="28sp"
+            android:gravity="center" />
+    </FrameLayout>
 
-    <!-- Camera Preview (below title) -->
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
-        android:layout_width="100dp"
-        android:layout_height="100dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginEnd="16dp"
-        app:layout_constraintTop_toBottomOf="@id/titleText"
-        app:layout_constraintEnd_toEndOf="parent" />
-
-    <!-- Heart Icon Circle -->
-    <View
-        android:id="@+id/heartCircle"
-        android:layout_width="200dp"
-        android:layout_height="200dp"
-        android:background="@drawable/circle_background"
-        app:layout_constraintTop_toBottomOf="@id/titleText"
+    <!-- Heart Circle Container with Camera Inside -->
+    <FrameLayout
+        android:id="@+id/heartCircleContainer"
+        android:layout_width="220dp"
+        android:layout_height="220dp"
+        app:layout_constraintTop_toBottomOf="@id/titleContainer"
         app:layout_constraintBottom_toTopOf="@id/heartRateText"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginTop="40dp" />
-
-    <!-- Heart Emoji -->
-    <TextView
-        android:id="@+id/heartIcon"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="❤️"
-        android:textSize="80sp"
-        app:layout_constraintTop_toTopOf="@id/heartCircle"
-        app:layout_constraintBottom_toBottomOf="@id/heartCircle"
-        app:layout_constraintStart_toStartOf="@id/heartCircle"
-        app:layout_constraintEnd_toEndOf="@id/heartCircle" />
+        android:layout_marginTop="20dp">
+        
+        <!-- Camera Preview (circular, behind heart border) -->
+        <androidx.camera.view.PreviewView
+            android:id="@+id/previewView"
+            android:layout_width="180dp"
+            android:layout_height="180dp"
+            android:layout_gravity="center"
+            android:background="@drawable/circular_clip"
+            android:clipToOutline="true" />
+        
+        <!-- Heart Circle Border/Glow (on top of camera) -->
+        <View
+            android:id="@+id/heartCircle"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/heart_glow_border"
+            android:elevation="8dp" />
+        
+        <!-- Heart Emoji (on top, semi-transparent) -->
+        <TextView
+            android:id="@+id/heartIcon"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="❤️"
+            android:textSize="90sp"
+            android:alpha="0.85"
+            android:elevation="10dp"
+            android:layout_gravity="center" />
+    </FrameLayout>
 
     <!-- BPM Display -->
     <TextView
@@ -74,10 +116,16 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="--"
-        android:textSize="72sp"
-        android:textColor="#FF4444"
+        android:textSize="80sp"
+        android:textColor="#FF5555"
         android:textStyle="bold"
-        android:layout_marginBottom="8dp"
+        android:fontFamily="sans-serif-medium"
+        android:letterSpacing="-0.02"
+        android:shadowColor="#FF0000"
+        android:shadowDx="0"
+        android:shadowDy="0"
+        android:shadowRadius="8"
+        android:layout_marginBottom="4dp"
         app:layout_constraintBottom_toTopOf="@id/bpmLabel"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
@@ -87,56 +135,72 @@
         android:id="@+id/bpmLabel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="BPM"
-        android:textSize="24sp"
-        android:textColor="#AAAAAA"
+        android:text="BEATS PER MINUTE"
+        android:textSize="16sp"
+        android:textColor="#888888"
+        android:letterSpacing="0.15"
+        android:fontFamily="sans-serif-light"
         app:layout_constraintBottom_toTopOf="@id/statusText"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginBottom="32dp" />
+        android:layout_marginBottom="40dp" />
 
-    <!-- Pulse Detected Indicator -->
+    <!-- Pulse Detected Indicator - Compact Version -->
     <LinearLayout
         android:id="@+id/pulseIndicator"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center"
+        android:gravity="center_vertical"
         android:visibility="gone"
-        android:layout_marginStart="32dp"
-        app:layout_constraintTop_toTopOf="@id/heartRateText"
-        app:layout_constraintBottom_toBottomOf="@id/heartRateText"
+        android:background="@drawable/pulse_indicator_background"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:elevation="4dp"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="24dp"
+        app:layout_constraintBottom_toTopOf="@id/heartRateText"
         app:layout_constraintStart_toStartOf="parent">
         
         <View
             android:id="@+id/pulseDot"
-            android:layout_width="12dp"
-            android:layout_height="12dp"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
             android:layout_marginEnd="8dp"
-            android:background="@drawable/pulse_dot" />
+            android:background="@drawable/pulse_dot_glow" />
         
         <TextView
             android:id="@+id/pulseText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Pulse\nDetected"
-            android:textSize="14sp"
+            android:text="PULSE"
+            android:textSize="11sp"
             android:textColor="#00FF88"
             android:textStyle="bold"
+            android:letterSpacing="0.1"
             android:gravity="center" />
     </LinearLayout>
 
-    <!-- Status Text -->
+    <!-- Status Text Container with Background -->
     <TextView
         android:id="@+id/statusText"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:text="Keep finger OFF camera - calibrating..."
-        android:textSize="16sp"
-        android:textColor="#FFFFFF"
+        android:textSize="15sp"
+        android:textColor="#CCCCCC"
         android:gravity="center"
-        android:padding="24dp"
-        android:layout_marginBottom="32dp"
+        android:fontFamily="sans-serif-light"
+        android:letterSpacing="0.03"
+        android:lineSpacingExtra="4dp"
+        android:background="@drawable/status_background"
+        android:padding="20dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="48dp"
+        android:elevation="2dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
