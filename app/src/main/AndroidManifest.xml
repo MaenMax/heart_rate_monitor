@@ -5,6 +5,7 @@
     
     <application
         android:label="Heart Rate Monitor"
+        android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.HeartRateMonitor">
         <activity android:name=".MainActivity"
             android:exported="true">

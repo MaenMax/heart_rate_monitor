@@ -9,9 +9,10 @@
     <!-- Camera Preview (hidden, used for analysis) -->
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
-        android:layout_width="120dp"
-        android:layout_height="120dp"
+        android:layout_width="100dp"
+        android:layout_height="100dp"
         android:layout_margin="16dp"
+        android:layout_marginTop="60dp"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
@@ -80,33 +81,50 @@
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginBottom="32dp" />
 
+    <!-- Pulse Detected Indicator -->
+    <LinearLayout
+        android:id="@+id/pulseIndicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:visibility="gone"
+        android:layout_marginStart="32dp"
+        app:layout_constraintTop_toTopOf="@id/heartRateText"
+        app:layout_constraintBottom_toBottomOf="@id/heartRateText"
+        app:layout_constraintStart_toStartOf="parent">
+        
+        <View
+            android:id="@+id/pulseDot"
+            android:layout_width="12dp"
+            android:layout_height="12dp"
+            android:layout_marginEnd="8dp"
+            android:background="@drawable/pulse_dot" />
+        
+        <TextView
+            android:id="@+id/pulseText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Pulse\nDetected"
+            android:textSize="14sp"
+            android:textColor="#00FF88"
+            android:textStyle="bold"
+            android:gravity="center" />
+    </LinearLayout>
+
     <!-- Status Text -->
     <TextView
         android:id="@+id/statusText"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="Place your finger on the camera"
+        android:text="Keep finger OFF camera - calibrating..."
         android:textSize="16sp"
         android:textColor="#FFFFFF"
         android:gravity="center"
-        android:padding="16dp"
-        app:layout_constraintBottom_toTopOf="@id/measureButton"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginBottom="24dp" />
-
-    <!-- Measure Button -->
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/measureButton"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:text="Start Measuring"
-        android:textSize="18sp"
-        android:paddingVertical="16dp"
-        app:cornerRadius="12dp"
+        android:padding="24dp"
+        android:layout_marginBottom="32dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        android:layout_margin="32dp" />
+        app:layout_constraintEnd_toEndOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
