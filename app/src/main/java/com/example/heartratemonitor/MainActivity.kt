@@ -46,15 +46,29 @@ class MainActivity : AppCompatActivity() {
     // Sound effects
     private var toneGenerator: ToneGenerator? = null
     private var lastHeartbeatTime = 0L
-    private val MIN_HEARTBEAT_INTERVAL = 500L  // Minimum 500ms between heartbeats (max 120 BPM) - prevent rapid firing
+    private val MIN_HEARTBEAT_INTERVAL = 400L  // Minimum 400ms between heartbeats (max 150 BPM) - prevents double triggers
     private var isSoundMuted = false
+
+    // Beat detection state - tracks signal state machine
+    private var beatState = BeatState.WAITING_FOR_LOW
+    private var recentLow = Float.MAX_VALUE
+    private var recentHigh = Float.MIN_VALUE
+
+    private enum class BeatState {
+        WAITING_FOR_LOW,   // Waiting for signal to go below baseline
+        WAITING_FOR_RISE   // Signal is low, waiting for it to rise
+    }
     
     // Heart rate detection variables
     private val redValues = mutableListOf<Float>()
     private var frameCount = 0
     private val SAMPLE_DURATION_SECONDS = 10
-    private val FRAMES_PER_SECOND = 30
-    private val REQUIRED_FRAMES = SAMPLE_DURATION_SECONDS * FRAMES_PER_SECOND
+    private var measuredFramesPerSecond = 30f  // Will be calculated from actual timestamps
+    private val REQUIRED_FRAMES = SAMPLE_DURATION_SECONDS * 30  // Target frames
+
+    // Frame timing for accurate FPS measurement
+    private var firstFrameTimestamp = 0L
+    private var lastFrameTimestamp = 0L
     
     // Finger detection
     private var baselineBrightness: Float = 0f
@@ -70,7 +84,11 @@ class MainActivity : AppCompatActivity() {
     
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var pulseAnimationJob: Job? = null
-    
+    private var measurementTimeoutJob: Job? = null
+
+    // Flag to prevent race condition between timeout and frame completion
+    private var measurementCompleted = false
+
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
@@ -127,24 +145,34 @@ class MainActivity : AppCompatActivity() {
     
     private fun startMeasuring() {
         if (isMeasuring) return
-        
+
         isMeasuring = true
+        measurementCompleted = false
         redValues.clear()
         frameCount = 0
+        firstFrameTimestamp = 0L
+        lastFrameTimestamp = 0L
+        beatState = BeatState.WAITING_FOR_LOW
+        recentLow = Float.MAX_VALUE
+        recentHigh = Float.MIN_VALUE
         // Don't clear heart rate text - keep previous reading until new one is ready
         statusText.text = "Measuring... Keep your finger steady"
-        
+
         // Turn on flash
         camera?.cameraControl?.enableTorch(true)
         isFlashOn = true
-        
+
         // Show and animate pulse indicator
         showPulseIndicator()
-        
-        // Start timeout
-        mainScope.launch {
+
+        // Cancel any existing timeout job
+        measurementTimeoutJob?.cancel()
+
+        // Start timeout with race condition protection
+        measurementTimeoutJob = mainScope.launch {
             delay((SAMPLE_DURATION_SECONDS * 1000).toLong())
-            if (isMeasuring) {
+            if (isMeasuring && !measurementCompleted) {
+                measurementCompleted = true
                 calculateHeartRate()
             }
         }
@@ -156,13 +184,17 @@ class MainActivity : AppCompatActivity() {
         sustainedFingerContact = 0
         isFingerCurrentlyOnCamera = false
         consecutiveFingerOffFrames = 0  // Reset interruption counter
-        
+
+        // Cancel timeout to prevent race condition
+        measurementTimeoutJob?.cancel()
+        measurementTimeoutJob = null
+
         // Don't change status text here - let the caller set appropriate message
-        
+
         // Keep flash on for detection
         camera?.cameraControl?.enableTorch(true)
         isFlashOn = true
-        
+
         // Hide pulse indicator
         hidePulseIndicator()
     }
@@ -192,83 +224,134 @@ class MainActivity : AppCompatActivity() {
     private fun calculateRealtimeHeartRate(): Int? {
         // Calculate real-time heart rate from current data
         if (redValues.size < 90) return null
-        
+
         val smoothedValues = smoothSignal(redValues)
         val peaks = detectPeaks(smoothedValues)
-        
+
         if (peaks.size >= 3) {
+            // FPS-aware interval bounds: 40-200 BPM range
+            val minInterval = (measuredFramesPerSecond * 0.3f)  // 200 BPM = 0.3s per beat
+            val maxInterval = (measuredFramesPerSecond * 1.5f)  // 40 BPM = 1.5s per beat
+
             val intervals = mutableListOf<Float>()
             for (i in 1 until peaks.size) {
-                val interval = (peaks[i] - peaks[i-1]).toFloat()
-                if (interval > 10 && interval < 90) {
+                val interval = (peaks[i] - peaks[i - 1]).toFloat()
+                if (interval > minInterval && interval < maxInterval) {
                     intervals.add(interval)
                 }
             }
-            
+
             if (intervals.size >= 2) {
-                intervals.sort()
-                val medianInterval = if (intervals.size % 2 == 0) {
-                    (intervals[intervals.size / 2 - 1] + intervals[intervals.size / 2]) / 2
+                // Filter outliers using IQR method
+                val filteredIntervals = filterOutliers(intervals)
+                if (filteredIntervals.isEmpty()) return null
+
+                filteredIntervals.sort()
+                val medianInterval = if (filteredIntervals.size % 2 == 0) {
+                    (filteredIntervals[filteredIntervals.size / 2 - 1] + filteredIntervals[filteredIntervals.size / 2]) / 2
                 } else {
-                    intervals[intervals.size / 2]
+                    filteredIntervals[filteredIntervals.size / 2]
                 }
-                
-                val heartRate = (60.0f * FRAMES_PER_SECOND / medianInterval).toInt()
-                if (heartRate in 45..180) {
+
+                val heartRate = (60.0f * measuredFramesPerSecond / medianInterval).toInt()
+                if (heartRate in 40..200) {
                     return heartRate
                 }
             }
         }
-        
+
         return null
+    }
+
+    private fun filterOutliers(intervals: MutableList<Float>): MutableList<Float> {
+        if (intervals.size < 4) return intervals
+
+        val sorted = intervals.sorted()
+        val q1 = sorted[sorted.size / 4]
+        val q3 = sorted[sorted.size * 3 / 4]
+        val iqr = q3 - q1
+        val lowerBound = q1 - 1.5f * iqr
+        val upperBound = q3 + 1.5f * iqr
+
+        return intervals.filter { it >= lowerBound && it <= upperBound }.toMutableList()
+    }
+
+    private fun calculateSignalQuality(): Float {
+        // Returns a quality score from 0.0 to 1.0
+        if (redValues.size < 60) return 0f
+
+        val recentValues = redValues.takeLast(60)
+        val mean = recentValues.average().toFloat()
+        val variance = recentValues.map { (it - mean) * (it - mean) }.average().toFloat()
+        val stdDev = kotlin.math.sqrt(variance)
+
+        // Good PPG signal should have moderate variance (not flat, not too noisy)
+        // Typical good signal has stdDev between 1-10 for normalized values
+        val normalizedStdDev = stdDev / mean * 100  // As percentage of mean
+
+        return when {
+            normalizedStdDev < 0.1f -> 0.1f  // Signal too flat - poor contact
+            normalizedStdDev > 5f -> 0.3f    // Signal too noisy - movement
+            normalizedStdDev in 0.5f..2f -> 1.0f  // Optimal range
+            else -> 0.7f  // Acceptable
+        }
     }
     
     private fun calculatePartialHeartRate(): Int? {
         // Calculate heart rate from partial data
         if (redValues.size < 30) {
-            // Not enough data even for partial reading
             return null
         }
-        
+
         val smoothedValues = smoothSignal(redValues)
         val peaks = detectPeaks(smoothedValues)
-        
+
         if (peaks.size >= 2) {
+            // FPS-aware interval bounds
+            val minInterval = (measuredFramesPerSecond * 0.3f)  // 200 BPM
+            val maxInterval = (measuredFramesPerSecond * 1.5f)  // 40 BPM
+
             val intervals = mutableListOf<Float>()
             for (i in 1 until peaks.size) {
-                val interval = (peaks[i] - peaks[i-1]).toFloat()
-                if (interval > 10 && interval < 90) {
+                val interval = (peaks[i] - peaks[i - 1]).toFloat()
+                if (interval > minInterval && interval < maxInterval) {
                     intervals.add(interval)
                 }
             }
-            
+
             if (intervals.isNotEmpty()) {
-                intervals.sort()
-                val medianInterval = if (intervals.size % 2 == 0) {
-                    (intervals[intervals.size / 2 - 1] + intervals[intervals.size / 2]) / 2
+                val filteredIntervals = if (intervals.size >= 4) filterOutliers(intervals) else intervals
+                if (filteredIntervals.isEmpty()) return null
+
+                filteredIntervals.sort()
+                val medianInterval = if (filteredIntervals.size % 2 == 0) {
+                    (filteredIntervals[filteredIntervals.size / 2 - 1] + filteredIntervals[filteredIntervals.size / 2]) / 2
                 } else {
-                    intervals[intervals.size / 2]
+                    filteredIntervals[filteredIntervals.size / 2]
                 }
-                
-                val partialHeartRate = (60.0f * FRAMES_PER_SECOND / medianInterval).toInt()
-                
-                if (partialHeartRate in 45..180) {
+
+                val partialHeartRate = (60.0f * measuredFramesPerSecond / medianInterval).toInt()
+
+                if (partialHeartRate in 40..200) {
                     return partialHeartRate
                 }
             }
         }
-        
+
         return null
     }
     
     private fun calculateHeartRate() {
+        // Check signal quality first
+        val signalQuality = calculateSignalQuality()
+
         // ALWAYS try to calculate and show heart rate - even with less data
         if (redValues.size < 90) {
-            // Try partial calculation
             val partialHR = calculatePartialHeartRate()
             if (partialHR != null) {
                 heartRateText.text = partialHR.toString()
-                statusText.text = "✓ Heart rate: $partialHR BPM (short measurement)"
+                val qualityText = if (signalQuality < 0.5f) " (weak signal)" else " (short measurement)"
+                statusText.text = "✓ Heart rate: $partialHR BPM$qualityText"
             } else {
                 statusText.text = "Not enough data. Place finger again."
                 heartRateText.text = "--"
@@ -276,15 +359,14 @@ class MainActivity : AppCompatActivity() {
             stopMeasuring()
             return
         }
-        
+
         // Apply smoothing filter to reduce noise
         val smoothedValues = smoothSignal(redValues)
-        
+
         // Calculate heart rate using peak detection
         val peaks = detectPeaks(smoothedValues)
-        
+
         if (peaks.size < 3) {
-            // Still try to calculate something
             val partialHR = calculatePartialHeartRate()
             if (partialHR != null) {
                 heartRateText.text = partialHR.toString()
@@ -296,17 +378,20 @@ class MainActivity : AppCompatActivity() {
             stopMeasuring()
             return
         }
-        
+
+        // FPS-aware interval bounds
+        val minInterval = (measuredFramesPerSecond * 0.3f)  // 200 BPM
+        val maxInterval = (measuredFramesPerSecond * 1.5f)  // 40 BPM
+
         // Calculate intervals between peaks
         val intervals = mutableListOf<Float>()
         for (i in 1 until peaks.size) {
-            val interval = (peaks[i] - peaks[i-1]).toFloat()
-            // Filter out unrealistic intervals
-            if (interval > 10 && interval < 90) {
+            val interval = (peaks[i] - peaks[i - 1]).toFloat()
+            if (interval > minInterval && interval < maxInterval) {
                 intervals.add(interval)
             }
         }
-        
+
         if (intervals.isEmpty()) {
             val partialHR = calculatePartialHeartRate()
             if (partialHR != null) {
@@ -319,43 +404,135 @@ class MainActivity : AppCompatActivity() {
             stopMeasuring()
             return
         }
-        
-        // Use median for accuracy
-        intervals.sort()
-        val medianInterval = if (intervals.size % 2 == 0) {
-            (intervals[intervals.size / 2 - 1] + intervals[intervals.size / 2]) / 2
-        } else {
-            intervals[intervals.size / 2]
+
+        // Filter outliers for more accurate reading
+        val filteredIntervals = if (intervals.size >= 4) filterOutliers(intervals) else intervals
+        if (filteredIntervals.isEmpty()) {
+            statusText.text = "Inconsistent heartbeat detected. Try again."
+            heartRateText.text = "--"
+            stopMeasuring()
+            return
         }
-        
-        val heartRate = (60.0f * FRAMES_PER_SECOND / medianInterval).toInt()
-        
-        // ALWAYS SHOW THE NUMBER - even if outside ideal range
-        if (heartRate in 45..180) {
+
+        // Use median for accuracy
+        filteredIntervals.sort()
+        val medianInterval = if (filteredIntervals.size % 2 == 0) {
+            (filteredIntervals[filteredIntervals.size / 2 - 1] + filteredIntervals[filteredIntervals.size / 2]) / 2
+        } else {
+            filteredIntervals[filteredIntervals.size / 2]
+        }
+
+        val heartRate = (60.0f * measuredFramesPerSecond / medianInterval).toInt()
+
+        // Calculate confidence based on signal quality and interval consistency
+        val intervalVariance = if (filteredIntervals.size > 1) {
+            val mean = filteredIntervals.average().toFloat()
+            filteredIntervals.map { (it - mean) * (it - mean) }.average().toFloat()
+        } else 0f
+        val intervalConsistency = if (intervalVariance < 25) 1.0f else if (intervalVariance < 100) 0.7f else 0.4f
+        val confidence = (signalQuality + intervalConsistency) / 2
+
+        // Determine confidence label
+        val confidenceLabel = when {
+            confidence >= 0.8f -> "High confidence"
+            confidence >= 0.5f -> "Good"
+            else -> "Low confidence"
+        }
+
+        // Show result with confidence
+        if (heartRate in 40..200) {
             heartRateText.text = heartRate.toString()
-            statusText.text = "✓ Heart rate: $heartRate BPM | Remove finger or measure again"
+            statusText.text = "✓ $heartRate BPM ($confidenceLabel) | Tap to measure again"
             animateHeartbeat()
         } else if (heartRate in 30..220) {
-            // Still show it but warn user
             heartRateText.text = heartRate.toString()
-            statusText.text = "⚠ Heart rate: $heartRate BPM (unusual, please retry)"
+            statusText.text = "⚠ $heartRate BPM (unusual range, please retry)"
         } else {
             heartRateText.text = "--"
-            statusText.text = "Invalid reading: $heartRate BPM out of range."
+            statusText.text = "Invalid reading. Please try again."
         }
-        
+
         stopMeasuring()
     }
     
     private fun smoothSignal(signal: List<Float>): List<Float> {
-        // Simple moving average filter
-        val windowSize = 3
-        val smoothed = mutableListOf<Float>()
-        
+        // Apply bandpass filter for heart rate detection (0.5 - 4 Hz for 30-240 BPM)
+        // Step 1: Remove DC component and low-frequency drift (high-pass)
+        val detrended = removeTrend(signal)
+
+        // Step 2: Apply low-pass filter to remove high-frequency noise
+        val lowPassed = lowPassFilter(detrended, cutoffFrames = 5)  // ~6Hz cutoff at 30fps
+
+        // Step 3: Apply smoothing for cleaner peaks
+        val smoothed = movingAverageFilter(lowPassed, windowSize = 5)
+
+        return smoothed
+    }
+
+    private fun removeTrend(signal: List<Float>): List<Float> {
+        // High-pass filter using a large moving average subtraction
+        // This removes breathing artifacts and slow drift
+        val windowSize = (measuredFramesPerSecond * 2).toInt().coerceAtLeast(30)  // ~2 second window
+        val trend = mutableListOf<Float>()
+
         for (i in signal.indices) {
             var sum = 0f
             var count = 0
-            for (j in -windowSize..windowSize) {
+            val halfWindow = windowSize / 2
+            for (j in -halfWindow..halfWindow) {
+                val index = i + j
+                if (index in signal.indices) {
+                    sum += signal[index]
+                    count++
+                }
+            }
+            trend.add(sum / count)
+        }
+
+        // Subtract trend to get high-passed signal
+        return signal.mapIndexed { index, value -> value - trend[index] }
+    }
+
+    private fun lowPassFilter(signal: List<Float>, cutoffFrames: Int): List<Float> {
+        // Simple low-pass using weighted moving average (approximates Butterworth)
+        val result = mutableListOf<Float>()
+        val weights = generateGaussianWeights(cutoffFrames)
+
+        for (i in signal.indices) {
+            var sum = 0f
+            var weightSum = 0f
+            for (j in weights.indices) {
+                val offset = j - weights.size / 2
+                val index = i + offset
+                if (index in signal.indices) {
+                    sum += signal[index] * weights[j]
+                    weightSum += weights[j]
+                }
+            }
+            result.add(if (weightSum > 0) sum / weightSum else signal[i])
+        }
+
+        return result
+    }
+
+    private fun generateGaussianWeights(size: Int): List<Float> {
+        val sigma = size / 2f
+        val weights = mutableListOf<Float>()
+        for (i in 0 until size) {
+            val x = i - size / 2f
+            weights.add(kotlin.math.exp(-(x * x) / (2 * sigma * sigma)).toFloat())
+        }
+        return weights
+    }
+
+    private fun movingAverageFilter(signal: List<Float>, windowSize: Int): List<Float> {
+        val smoothed = mutableListOf<Float>()
+        val halfWindow = windowSize / 2
+
+        for (i in signal.indices) {
+            var sum = 0f
+            var count = 0
+            for (j in -halfWindow..halfWindow) {
                 val index = i + j
                 if (index in signal.indices) {
                     sum += signal[index]
@@ -364,50 +541,63 @@ class MainActivity : AppCompatActivity() {
             }
             smoothed.add(sum / count)
         }
-        
+
         return smoothed
     }
     
     private fun detectPeaks(values: List<Float>): List<Int> {
         if (values.isEmpty()) return emptyList()
-        
-        // Normalize the signal (remove DC component)
+
+        // Signal should already be detrended, but ensure zero-mean
         val mean = values.average().toFloat()
         val normalized = values.map { it - mean }
-        
+
         // Calculate standard deviation for adaptive threshold
         val variance = normalized.map { it * it }.average()
         val stdDev = kotlin.math.sqrt(variance).toFloat()
-        
-        // Find local maxima
+
+        // Calculate min/max peak distances based on actual measured FPS
+        // Min distance: 200ms (max 300 BPM - allows for exercise)
+        // Max distance: 2000ms (min 30 BPM - allows for athletes)
+        val minPeakDistance = (measuredFramesPerSecond * 0.2f).toInt().coerceAtLeast(6)  // 200ms
+        val maxPeakDistance = (measuredFramesPerSecond * 2.0f).toInt()  // 2 seconds
+
+        // Find local maxima with improved algorithm
         val peaks = mutableListOf<Int>()
-        val threshold = stdDev * 0.3f  // Adaptive threshold based on signal strength
-        val minPeakDistance = 18  // Minimum 18 frames between peaks (max 100 BPM at 30fps)
-        val maxPeakDistance = 60  // Maximum 60 frames between peaks (min 30 BPM at 30fps)
-        
-        for (i in 2 until normalized.size - 2) {
-            // Check if this is a local maximum (compare with neighbors)
-            if (normalized[i] > threshold &&
-                normalized[i] > normalized[i - 1] &&
-                normalized[i] > normalized[i + 1] &&
-                normalized[i] > normalized[i - 2] &&
-                normalized[i] > normalized[i + 2]) {
-                
-                // Check minimum distance from last peak
-                if (peaks.isEmpty()) {
+        val threshold = stdDev * 0.5f  // Increased threshold to reduce noise detection
+
+        // Use a wider window for peak detection (3 samples each side)
+        for (i in 3 until normalized.size - 3) {
+            val current = normalized[i]
+
+            // Must be above threshold
+            if (current <= threshold) continue
+
+            // Must be local maximum (higher than all neighbors in window)
+            val isLocalMax = current > normalized[i - 1] &&
+                    current > normalized[i + 1] &&
+                    current > normalized[i - 2] &&
+                    current > normalized[i + 2] &&
+                    current > normalized[i - 3] &&
+                    current > normalized[i + 3]
+
+            if (!isLocalMax) continue
+
+            // Check distance constraints
+            if (peaks.isEmpty()) {
+                peaks.add(i)
+            } else {
+                val distance = i - peaks.last()
+                if (distance >= minPeakDistance && distance <= maxPeakDistance) {
                     peaks.add(i)
-                } else {
-                    val distance = i - peaks.last()
-                    if (distance >= minPeakDistance) {
-                        // Also check it's not too far (would indicate missed peaks)
-                        if (distance <= maxPeakDistance) {
-                            peaks.add(i)
-                        }
-                    }
+                } else if (distance > maxPeakDistance) {
+                    // Gap too large - might have missed beats, still add this peak
+                    peaks.add(i)
                 }
+                // If distance < minPeakDistance, skip (likely noise)
             }
         }
-        
+
         return peaks
     }
     
@@ -445,18 +635,46 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun startCamera() {
+        // Check if device has flash
+        val cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
+        var hasFlash = false
+        try {
+            for (cameraId in cameraManager.cameraIdList) {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+                if (lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                    hasFlash = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            // Assume no flash if we can't check
+            hasFlash = false
+        }
+
+        if (!hasFlash) {
+            Toast.makeText(
+                this,
+                "This device doesn't have a flash. Heart rate detection requires a flash.",
+                Toast.LENGTH_LONG
+            ).show()
+            statusText.text = "No flash detected. App requires camera flash."
+            heartRateText.text = "N/A"
+            return
+        }
+
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-        
+
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
-            
+
             // Preview
             val preview = Preview.Builder()
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
-            
+
             // Image analysis for heart rate detection
             val imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -464,41 +682,104 @@ class MainActivity : AppCompatActivity() {
                 .also {
                     it.setAnalyzer(cameraExecutor, HeartRateAnalyzer())
                 }
-            
+
             // Select back camera
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-            
+
             try {
                 cameraProvider.unbindAll()
                 camera = cameraProvider.bindToLifecycle(
                     this, cameraSelector, preview, imageAnalysis
                 )
-                
+
                 // Turn on flash immediately for finger detection
-                camera?.cameraControl?.enableTorch(true)
+                camera?.cameraControl?.enableTorch(true)?.addListener({
+                    // Verify flash actually turned on by checking after a short delay
+                    mainScope.launch {
+                        delay(500)
+                        if (!isFlashOn) {
+                            runOnUiThread {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "Flash may not be working properly",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
+                }, ContextCompat.getMainExecutor(this))
                 isFlashOn = true
             } catch (e: Exception) {
-                Toast.makeText(this, "Failed to start camera: ${e.message}", 
-                    Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this, "Failed to start camera: ${e.message}",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
-            
+
         }, ContextCompat.getMainExecutor(this))
     }
     
     private inner class HeartRateAnalyzer : ImageAnalysis.Analyzer {
         override fun analyze(image: ImageProxy) {
-            // Get the Y plane (luminance) from YUV format
-            val buffer = image.planes[0].buffer
-            val data = ByteArray(buffer.remaining())
-            buffer.get(data)
-            
-            // Calculate average intensity
-            var sum = 0L
-            val step = 10  // Sample every 10th pixel for performance
-            for (i in data.indices step step) {
-                sum += (data[i].toInt() and 0xFF)
+            val currentTimestamp = System.currentTimeMillis()
+
+            // Extract RED channel from YUV_420_888 format
+            // In YUV, we need to convert to RGB to get the red channel
+            // Red = Y + 1.402 * (V - 128)
+            val yBuffer = image.planes[0].buffer
+            val uBuffer = image.planes[1].buffer
+            val vBuffer = image.planes[2].buffer
+
+            val yData = ByteArray(yBuffer.remaining())
+            val uData = ByteArray(uBuffer.remaining())
+            val vData = ByteArray(vBuffer.remaining())
+
+            yBuffer.get(yData)
+            uBuffer.get(uData)
+            vBuffer.get(vData)
+
+            val width = image.width
+            val height = image.height
+            val uvPixelStride = image.planes[1].pixelStride
+            val uvRowStride = image.planes[1].rowStride
+
+            // Calculate average RED channel value (sample center region for better signal)
+            var redSum = 0.0
+            var sampleCount = 0
+            val step = 8  // Sample every 8th pixel for performance
+
+            // Focus on center 50% of image for better finger coverage
+            val startX = width / 4
+            val endX = width * 3 / 4
+            val startY = height / 4
+            val endY = height * 3 / 4
+
+            for (y in startY until endY step step) {
+                for (x in startX until endX step step) {
+                    val yIndex = y * width + x
+                    val uvIndex = (y / 2) * uvRowStride + (x / 2) * uvPixelStride
+
+                    if (yIndex < yData.size && uvIndex < vData.size) {
+                        val yValue = (yData[yIndex].toInt() and 0xFF).toFloat()
+                        val vValue = (vData[uvIndex].toInt() and 0xFF).toFloat()
+
+                        // Convert to Red channel: R = Y + 1.402 * (V - 128)
+                        val red = yValue + 1.402f * (vValue - 128f)
+                        redSum += red.coerceIn(0f, 255f)
+                        sampleCount++
+                    }
+                }
             }
-            val avgIntensity = sum.toFloat() / (data.size / step)
+
+            val avgRedIntensity = if (sampleCount > 0) (redSum / sampleCount).toFloat() else 0f
+
+            // Also calculate brightness for finger detection (using Y plane)
+            var brightnessSum = 0L
+            val brightnessStep = 10
+            for (i in yData.indices step brightnessStep) {
+                brightnessSum += (yData[i].toInt() and 0xFF)
+            }
+            val avgIntensity = brightnessSum.toFloat() / (yData.size / brightnessStep)
             
             // Finger detection logic
             if (!isMeasuring) {
@@ -591,31 +872,65 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             } else if (frameCount < REQUIRED_FRAMES) {
-                // Measuring mode - collect data
-                redValues.add(avgIntensity)
+                // Measuring mode - collect RED channel data (not luminance)
+                redValues.add(avgRedIntensity)
                 frameCount++
+
+                // Track timestamps for accurate FPS calculation
+                if (firstFrameTimestamp == 0L) {
+                    firstFrameTimestamp = currentTimestamp
+                }
+                lastFrameTimestamp = currentTimestamp
+
+                // Calculate actual FPS periodically
+                if (frameCount > 30) {
+                    val elapsedSeconds = (lastFrameTimestamp - firstFrameTimestamp) / 1000f
+                    if (elapsedSeconds > 0) {
+                        measuredFramesPerSecond = frameCount / elapsedSeconds
+                    }
+                }
                 
-                // CRITICAL: Detect heartbeat for sound and animation - FAST response!
-                if (redValues.size >= 8) {
-                    val currentTime = System.currentTimeMillis()
-                    
-                    // Use smaller windows for faster response (reduces lag)
-                    val current = redValues.last()  // Most recent frame
-                    val last2 = redValues.takeLast(2).average().toFloat()
-                    val last4 = redValues.takeLast(4).average().toFloat()
-                    val last8 = redValues.takeLast(8).average().toFloat()
-                    
-                    // Detect peak: current values higher than recent past
-                    // Immediate response to brightness increase
-                    val isPeak = current > last2 && last2 > last4
-                    val strength = abs(current - last8)
-                    
-                    // Trigger on peaks with minimal delay
-                    if (isPeak && strength > 1.0f && currentTime - lastHeartbeatTime > MIN_HEARTBEAT_INTERVAL) {
-                        lastHeartbeatTime = currentTime
-                        // IMMEDIATE trigger - sound and animation
-                        runOnUiThread {
-                            onHeartbeatDetected()
+                // Real-time heartbeat detection using state machine
+                // Triggers IMMEDIATELY on the frame where we see significant brightness jump
+                val currentTime = System.currentTimeMillis()
+                val currentValue = avgRedIntensity
+
+                // Track min/max for adaptive threshold
+                if (currentValue < recentLow) recentLow = currentValue
+                if (currentValue > recentHigh) recentHigh = currentValue
+
+                // Need some range established first
+                val signalRange = recentHigh - recentLow
+                if (signalRange > 0.5f && redValues.size >= 5) {
+                    // Dynamic threshold at 40% of the way from low to high
+                    val threshold = recentLow + signalRange * 0.4f
+
+                    when (beatState) {
+                        BeatState.WAITING_FOR_LOW -> {
+                            // Wait for signal to drop below threshold
+                            if (currentValue < threshold) {
+                                beatState = BeatState.WAITING_FOR_RISE
+                            }
+                        }
+                        BeatState.WAITING_FOR_RISE -> {
+                            // Trigger beat when signal rises above threshold
+                            if (currentValue > threshold) {
+                                val timeSinceLastBeat = currentTime - lastHeartbeatTime
+
+                                if (timeSinceLastBeat > MIN_HEARTBEAT_INTERVAL) {
+                                    lastHeartbeatTime = currentTime
+                                    runOnUiThread {
+                                        onHeartbeatDetected()
+                                    }
+                                }
+
+                                // Go back to waiting for low
+                                beatState = BeatState.WAITING_FOR_LOW
+
+                                // Slowly decay the range to adapt to signal changes
+                                recentLow = recentLow + signalRange * 0.1f
+                                recentHigh = recentHigh - signalRange * 0.1f
+                            }
                         }
                     }
                 }
@@ -631,41 +946,55 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 
-                // Update progress
+                // Update progress with signal quality feedback
                 val progress = (frameCount * 100 / REQUIRED_FRAMES)
+                val qualityIndicator = if (redValues.size >= 60) {
+                    val quality = calculateSignalQuality()
+                    when {
+                        quality >= 0.8f -> "●●●"  // Excellent signal
+                        quality >= 0.5f -> "●●○"  // Good signal
+                        quality >= 0.3f -> "●○○"  // Weak signal
+                        else -> "○○○"            // Poor signal
+                    }
+                } else {
+                    "..."
+                }
                 runOnUiThread {
-                    statusText.text = "Measuring... $progress%"
+                    statusText.text = "Measuring $progress% | Signal: $qualityIndicator"
                 }
                 
-                // Don't cancel if we're close to completion (>80%)
-                if (progress < 80) {
-                    // Check if finger removed (brightness returns close to baseline)
-                    // Use more lenient threshold and require sustained removal to avoid false cancellations
-                    val currentDiff = abs(avgIntensity - baselineBrightness)
-                    
-                    if (currentDiff < 10) {
-                        // Brightness is close to baseline - might be finger removal
-                        consecutiveFingerOffFrames++
-                        
-                        // Only cancel after sustained removal (1 second of frames)
-                        if (consecutiveFingerOffFrames >= FINGER_OFF_THRESHOLD) {
-                            // Calculate partial heart rate before canceling
-                            val partialReading = calculatePartialHeartRate()
-                            runOnUiThread {
-                                if (partialReading != null) {
-                                    heartRateText.text = "~$partialReading"
-                                    statusText.text = "Interrupted! Partial: ~$partialReading BPM | Place finger to retry"
-                                } else {
-                                    statusText.text = "Interrupted. Not enough data. Place finger again."
-                                }
-                                stopMeasuring()
-                            }
-                            consecutiveFingerOffFrames = 0
-                        }
+                // Check if finger removed at ANY progress level
+                // Use more lenient threshold and require sustained removal to avoid false cancellations
+                val currentDiff = abs(avgIntensity - baselineBrightness)
+
+                if (currentDiff < 10) {
+                    // Brightness is close to baseline - might be finger removal
+                    consecutiveFingerOffFrames++
+
+                    // Require fewer frames to detect at higher progress (more sensitive near end)
+                    val requiredOffFrames = if (progress >= 80) {
+                        FINGER_OFF_THRESHOLD / 2  // Faster detection near completion
                     } else {
-                        // Finger is still on camera, reset counter
+                        FINGER_OFF_THRESHOLD
+                    }
+
+                    if (consecutiveFingerOffFrames >= requiredOffFrames) {
+                        val partialReading = calculatePartialHeartRate()
+                        runOnUiThread {
+                            if (partialReading != null) {
+                                heartRateText.text = "~$partialReading"
+                                val progressMsg = if (progress >= 80) "Almost done!" else "Interrupted!"
+                                statusText.text = "$progressMsg Partial: ~$partialReading BPM | Place finger to retry"
+                            } else {
+                                statusText.text = "Interrupted. Not enough data. Place finger again."
+                            }
+                            stopMeasuring()
+                        }
                         consecutiveFingerOffFrames = 0
                     }
+                } else {
+                    // Finger is still on camera, reset counter
+                    consecutiveFingerOffFrames = 0
                 }
             }
             
@@ -757,10 +1086,47 @@ class MainActivity : AppCompatActivity() {
         colorAnimator.start()
     }
     
+    override fun onPause() {
+        super.onPause()
+        // Cancel measurement if app goes to background
+        if (isMeasuring) {
+            val partialReading = calculatePartialHeartRate()
+            if (partialReading != null) {
+                heartRateText.text = "~$partialReading"
+                statusText.text = "Paused. Partial: ~$partialReading BPM | Resume to retry"
+            } else {
+                statusText.text = "Measurement paused. Place finger to restart."
+            }
+            stopMeasuring()
+        }
+
+        // Turn off flash when app is paused to save battery
+        camera?.cameraControl?.enableTorch(false)
+        isFlashOn = false
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Reset state and recalibrate when app resumes
+        if (camera != null) {
+            // Turn flash back on
+            camera?.cameraControl?.enableTorch(true)
+            isFlashOn = true
+
+            // Reset calibration to ensure accurate baseline
+            brightnessReadings.clear()
+            baselineBrightness = 0f
+            sustainedFingerContact = 0
+            isFingerCurrentlyOnCamera = false
+            statusText.text = "Recalibrating... Keep finger OFF"
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
         pulseAnimationJob?.cancel()
+        measurementTimeoutJob?.cancel()
         mainScope.cancel()
         toneGenerator?.release()
         camera?.cameraControl?.enableTorch(false)
