@@ -2,8 +2,8 @@ package com.example.heartratemonitor
 
 import android.Manifest
 import android.animation.ObjectAnimator
+import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.ImageFormat
 import android.graphics.Outline
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -20,12 +20,14 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.google.android.material.button.MaterialButton
+import androidx.lifecycle.lifecycleScope
+import com.airbnb.lottie.LottieAnimationView
+import com.example.heartratemonitor.data.HeartRateDatabase
+import com.example.heartratemonitor.data.HeartRateMeasurement
 import kotlinx.coroutines.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
-import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity() {
     
@@ -36,7 +38,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pulseIndicator: View
     private lateinit var pulseDot: View
     private lateinit var muteButton: TextView
-    
+    private lateinit var historyButton: View
+    private lateinit var ecgWaveformView: ECGWaveformView
+    private lateinit var heartLottie: LottieAnimationView
+    private lateinit var loadingAnimation: LottieAnimationView
+
+    private lateinit var database: HeartRateDatabase
+    private var lastConfidence: String = "Good"
+
     private lateinit var cameraExecutor: ExecutorService
     private var camera: Camera? = null
     private var isFlashOn = false
@@ -80,7 +89,11 @@ class MainActivity : AppCompatActivity() {
     
     // Interruption detection (to prevent false cancellations)
     private var consecutiveFingerOffFrames = 0
-    private val FINGER_OFF_THRESHOLD = 10  // Need 10 consecutive frames (~0.3 second) to confirm finger is really off
+    private val FINGER_OFF_THRESHOLD = 5  // Need 5 consecutive frames (~0.17 second) to confirm finger is really off
+
+    // Track brightness during measurement to detect finger removal
+    private var measurementBrightnessSum = 0f
+    private var measurementBrightnessCount = 0
     
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var pulseAnimationJob: Job? = null
@@ -105,7 +118,14 @@ class MainActivity : AppCompatActivity() {
         pulseIndicator = findViewById(R.id.pulseIndicator)
         pulseDot = findViewById(R.id.pulseDot)
         muteButton = findViewById(R.id.muteButton)
-        
+        historyButton = findViewById(R.id.historyButton)
+        ecgWaveformView = findViewById(R.id.ecgWaveformView)
+        heartLottie = findViewById(R.id.heartLottie)
+        loadingAnimation = findViewById(R.id.loadingAnimation)
+
+        // Initialize database
+        database = HeartRateDatabase.getDatabase(this)
+
         cameraExecutor = Executors.newSingleThreadExecutor()
         
         // Make camera preview circular
@@ -120,6 +140,11 @@ class MainActivity : AppCompatActivity() {
         muteButton.setOnClickListener {
             isSoundMuted = !isSoundMuted
             muteButton.text = if (isSoundMuted) "🔇" else "🔊"
+        }
+
+        // History button click listener
+        historyButton.setOnClickListener {
+            startActivity(Intent(this, HistoryActivity::class.java))
         }
         
         // Initialize sound generator with higher volume
@@ -155,6 +180,9 @@ class MainActivity : AppCompatActivity() {
         beatState = BeatState.WAITING_FOR_LOW
         recentLow = Float.MAX_VALUE
         recentHigh = Float.MIN_VALUE
+        measurementBrightnessSum = 0f
+        measurementBrightnessCount = 0
+        consecutiveFingerOffFrames = 0
         // Don't clear heart rate text - keep previous reading until new one is ready
         statusText.text = "Measuring... Keep your finger steady"
 
@@ -164,6 +192,17 @@ class MainActivity : AppCompatActivity() {
 
         // Show and animate pulse indicator
         showPulseIndicator()
+
+        // Show ECG waveform and hide loading animation
+        loadingAnimation.visibility = View.GONE
+        ecgWaveformView.visibility = View.VISIBLE
+        ecgWaveformView.clearData()
+        ecgWaveformView.startAnimation()
+
+        // Show Lottie heartbeat animation, hide emoji
+        heartIcon.visibility = View.GONE
+        heartLottie.visibility = View.VISIBLE
+        heartLottie.playAnimation()
 
         // Cancel any existing timeout job
         measurementTimeoutJob?.cancel()
@@ -197,6 +236,12 @@ class MainActivity : AppCompatActivity() {
 
         // Hide pulse indicator
         hidePulseIndicator()
+
+        // Stop ECG waveform and Lottie animations
+        ecgWaveformView.stopAnimation()
+        heartLottie.cancelAnimation()
+        heartLottie.visibility = View.GONE
+        heartIcon.visibility = View.VISIBLE
     }
     
     private fun showPulseIndicator() {
@@ -438,21 +483,37 @@ class MainActivity : AppCompatActivity() {
             confidence >= 0.5f -> "Good"
             else -> "Low confidence"
         }
+        lastConfidence = confidenceLabel
 
         // Show result with confidence
         if (heartRate in 40..200) {
             heartRateText.text = heartRate.toString()
             statusText.text = "✓ $heartRate BPM ($confidenceLabel) | Tap to measure again"
             animateHeartbeat()
+
+            // Save measurement to database
+            saveMeasurement(heartRate, confidenceLabel)
         } else if (heartRate in 30..220) {
             heartRateText.text = heartRate.toString()
             statusText.text = "⚠ $heartRate BPM (unusual range, please retry)"
+            saveMeasurement(heartRate, "Low confidence")
         } else {
             heartRateText.text = "--"
             statusText.text = "Invalid reading. Please try again."
         }
 
         stopMeasuring()
+    }
+
+    private fun saveMeasurement(bpm: Int, confidence: String) {
+        lifecycleScope.launch {
+            val measurement = HeartRateMeasurement(
+                bpm = bpm,
+                confidence = confidence,
+                duration = SAMPLE_DURATION_SECONDS
+            )
+            database.heartRateDao().insertMeasurement(measurement)
+        }
     }
     
     private fun smoothSignal(signal: List<Float>): List<Float> {
@@ -946,6 +1007,11 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 
+                // Track average brightness during measurement (with finger on)
+                measurementBrightnessSum += avgIntensity
+                measurementBrightnessCount++
+                val avgMeasurementBrightness = measurementBrightnessSum / measurementBrightnessCount
+
                 // Update progress with signal quality feedback
                 val progress = (frameCount * 100 / REQUIRED_FRAMES)
                 val qualityIndicator = if (redValues.size >= 60) {
@@ -962,23 +1028,22 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     statusText.text = "Measuring $progress% | Signal: $qualityIndicator"
                 }
-                
-                // Check if finger removed at ANY progress level
-                // Use more lenient threshold and require sustained removal to avoid false cancellations
-                val currentDiff = abs(avgIntensity - baselineBrightness)
 
-                if (currentDiff < 10) {
-                    // Brightness is close to baseline - might be finger removal
+                // Check if finger removed - finger removal causes brightness to INCREASE significantly
+                // When finger is on camera with flash: brightness is LOW (finger blocks/absorbs light)
+                // When finger is removed: brightness goes HIGH (back toward baseline)
+                val brightnessIncrease = avgIntensity - avgMeasurementBrightness
+                val diffFromBaseline = abs(avgIntensity - baselineBrightness)
+
+                // Finger is likely removed if:
+                // 1. Current brightness is much higher than average during measurement (>20 increase), OR
+                // 2. Current brightness is very close to baseline (within 15)
+                val fingerLikelyRemoved = brightnessIncrease > 20 || diffFromBaseline < 15
+
+                if (fingerLikelyRemoved) {
                     consecutiveFingerOffFrames++
 
-                    // Require fewer frames to detect at higher progress (more sensitive near end)
-                    val requiredOffFrames = if (progress >= 80) {
-                        FINGER_OFF_THRESHOLD / 2  // Faster detection near completion
-                    } else {
-                        FINGER_OFF_THRESHOLD
-                    }
-
-                    if (consecutiveFingerOffFrames >= requiredOffFrames) {
+                    if (consecutiveFingerOffFrames >= FINGER_OFF_THRESHOLD) {
                         val partialReading = calculatePartialHeartRate()
                         runOnUiThread {
                             if (partialReading != null) {
@@ -986,7 +1051,7 @@ class MainActivity : AppCompatActivity() {
                                 val progressMsg = if (progress >= 80) "Almost done!" else "Interrupted!"
                                 statusText.text = "$progressMsg Partial: ~$partialReading BPM | Place finger to retry"
                             } else {
-                                statusText.text = "Interrupted. Not enough data. Place finger again."
+                                statusText.text = "Finger removed. Place finger again."
                             }
                             stopMeasuring()
                         }
@@ -1025,6 +1090,9 @@ class MainActivity : AppCompatActivity() {
         // Synchronized heartbeat effects - sound + animation together
         playHeartbeatSound()
         animateHeartPulse()
+
+        // Trigger ECG waveform beat
+        ecgWaveformView.onHeartbeat()
     }
     
     private fun playHeartbeatSound() {

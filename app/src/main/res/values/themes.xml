@@ -5,12 +5,30 @@
         <item name="colorPrimary">#FF4444</item>
         <item name="colorPrimaryDark">#CC0000</item>
         <item name="colorAccent">#FF4444</item>
-        
+
         <!-- Status bar color -->
         <item name="android:statusBarColor">@android:color/transparent</item>
-        
+
         <!-- Background color -->
         <item name="android:windowBackground">#1A1A1A</item>
+    </style>
+
+    <!-- Dark themed AlertDialog -->
+    <style name="AlertDialogTheme" parent="ThemeOverlay.MaterialComponents.Dialog.Alert">
+        <item name="android:background">#1E1E1E</item>
+        <item name="android:textColor">#CCCCCC</item>
+        <item name="colorPrimary">#FF4444</item>
+        <item name="colorAccent">#FF4444</item>
+        <item name="buttonBarPositiveButtonStyle">@style/PositiveButtonStyle</item>
+        <item name="buttonBarNegativeButtonStyle">@style/NegativeButtonStyle</item>
+    </style>
+
+    <style name="PositiveButtonStyle" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">#FF4444</item>
+    </style>
+
+    <style name="NegativeButtonStyle" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">#888888</item>
     </style>
 </resources>
 

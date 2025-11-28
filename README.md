@@ -1,25 +1,36 @@
-# ❤️ Heart Rate Monitor App
+# Heart Rate Monitor App
 
 A professional Android app that measures your heart rate using your phone's camera and flash, powered by photoplethysmography (PPG) technology.
 
-![Version](https://img.shields.io/badge/version-1.0-blue)
+![Version](https://img.shields.io/badge/version-2.0-blue)
 ![Android](https://img.shields.io/badge/Android-7.0%2B-green)
 ![License](https://img.shields.io/badge/license-Educational-orange)
 
-## ✨ Features
+## Features
 
-- 💓 **Automatic Pulse Detection** - No buttons! Just place your finger
-- 🔊 **Real-time Heartbeat Sound** - Hear your pulse like a medical device
-- 🎨 **Live Heart Animation** - Visual pulse synchronized with your heartbeat
-- 📹 **Camera-in-Heart Design** - See your finger through the heart circle
-- 📊 **Real-time BPM Display** - Updates every second during measurement
-- 🔇 **Mute Control** - Toggle heartbeat sound on/off
-- 💎 **Premium UI** - Beautiful gradient backgrounds and glowing effects
-- ⚡ **Fast Detection** - Minimal lag between actual pulse and feedback
-- 📈 **Partial Readings** - Shows estimate even if measurement interrupted
-- ✅ **Smart Validation** - Ensures accurate baseline calibration
+### Core Measurement
+- **Automatic Pulse Detection** - No buttons needed, just place your finger
+- **Real-time Heartbeat Sound** - Hear your pulse like a medical device
+- **Live Heart Animation** - Visual pulse synchronized with your heartbeat
+- **Camera-in-Heart Design** - See your finger through the heart circle
+- **Real-time BPM Display** - Updates every second during measurement
+- **Smart Finger Detection** - Automatically detects when finger is placed or removed
 
-## 🎬 How It Works
+### New in v2.0
+- **ECG Waveform Visualization** - Real-time ECG-style graph showing your heartbeat pattern
+- **Lottie Animations** - Smooth, professional heartbeat animations during measurement
+- **Measurement History** - Track all your past readings with statistics
+- **Statistics Dashboard** - View average, min, max BPM over the last 7 days
+- **Local Database** - All measurements saved securely on your device
+
+### UI/UX
+- **Mute Control** - Toggle heartbeat sound on/off
+- **Premium UI** - Beautiful gradient backgrounds and glowing effects
+- **Fast Detection** - Minimal lag between actual pulse and feedback
+- **Partial Readings** - Shows estimate even if measurement interrupted
+- **Smart Validation** - Ensures accurate baseline calibration
+
+## How It Works
 
 ### The Science: Photoplethysmography (PPG)
 
@@ -31,15 +42,15 @@ A professional Android app that measures your heart rate using your phone's came
 
 ### The Experience
 
-1. **Open app** → Camera flash turns on, calibration begins
-2. **Wait 1 second** → "Ready! Place your finger..."
-3. **Place finger** on rear camera → Automatic detection!
-4. **"PULSE" indicator** appears → Measurement starts
-5. **Hear & see** → BEEP 🔊 + Heart pulses 💓 on each beat
-6. **Watch BPM** → Updates in real-time as it measures
-7. **Final reading** → Accurate heart rate after 10 seconds!
+1. **Open app** - Camera flash turns on, calibration begins
+2. **Wait 1 second** - "Ready! Place your finger..."
+3. **Place finger** on rear camera - Automatic detection!
+4. **ECG waveform** appears - Watch your heartbeat in real-time
+5. **Hear & see** - BEEP + Heart pulses on each beat
+6. **Watch BPM** - Updates in real-time as it measures
+7. **Final reading** - Accurate heart rate after 10 seconds, automatically saved!
 
-## 📱 Usage
+## Usage
 
 ### Simple 3-Step Process
 
@@ -50,59 +61,99 @@ A professional Android app that measures your heart rate using your phone's came
 
 2. **Measurement** (10 seconds)
    - Place finger firmly on rear camera
-   - "PULSE" indicator appears (green badge)
+   - ECG waveform and Lottie animation activate
    - Hear beeps and see heart pulse with each beat
    - BPM number updates every second
-   - Progress: 0% → 100%
+   - Progress: 0% - 100%
 
 3. **Result**
    - Final heart rate displayed
+   - Measurement automatically saved to history
    - Remove finger or measure again!
 
 ### Controls
 
-- **🔊/🔇 Speaker Button** (top-left): Mute/unmute heartbeat sound
-- **Camera View** (center): Shows your finger inside the heart circle
+| Button | Location | Function |
+|--------|----------|----------|
+| Speaker | Top-left | Mute/unmute heartbeat sound |
+| History | Top-right | View measurement history & stats |
+| Camera View | Center | Shows your finger inside the heart circle |
 
-## 🎯 Tips for Best Results
+## History & Statistics
 
-- ✅ Keep finger OFF during initial 1-second calibration
-- ✅ Cover camera lens completely with your fingertip
-- ✅ Press gently but firmly (too hard restricts blood flow)
-- ✅ Keep finger and phone steady
-- ✅ Use in normal lighting (not pitch black)
-- ✅ Ensure your hands are warm (cold reduces blood flow)
+Access your measurement history by tapping the chart icon (top-right).
 
-## 🛠️ Technical Details
+### Statistics Dashboard
+- **AVG** - Average BPM over last 7 days
+- **MIN** - Lowest recorded BPM
+- **MAX** - Highest recorded BPM
+- **TOTAL** - Total number of measurements
+
+### History List
+- View all past measurements with date/time
+- See confidence level for each reading
+- Long-press to delete individual measurements
+- Clear all history with the delete button
+
+## Tips for Best Results
+
+- Keep finger OFF during initial 1-second calibration
+- Cover camera lens completely with your fingertip
+- Press gently but firmly (too hard restricts blood flow)
+- Keep finger and phone steady
+- Use in normal lighting (not pitch black)
+- Ensure your hands are warm (cold reduces blood flow)
+
+## Technical Details
 
 ### Advanced Algorithm Features
 
 - **Adaptive Peak Detection** - Uses standard deviation, not fixed thresholds
-- **Signal Smoothing** - Moving average filter reduces noise
+- **Bandpass Filtering** - High-pass removes drift, low-pass removes noise
+- **Gaussian Smoothing** - Clean signal for accurate peak detection
 - **Median Calculation** - Better outlier resistance than average
 - **Real-time Updates** - Shows HR every second (not just at end)
 - **Multi-stage Validation** - Calibration stability checks
-- **Sustained Detection** - Prevents false positives from movements
-- **Fast Response** - 2-frame window for minimal lag
-
-### Implementation Highlights
-
-- **Automatic Finger Detection**: Detects sustained brightness change (1 second)
-- **Smart Interruption Handling**: Shows partial reading if measurement cut off
-- **Synchronized Feedback**: Sound and animation trigger together
-- **Peak Timing**: Detects actual peaks (not just increases) for accurate pulse rate
-- **Fallback Calculations**: Multiple algorithms ensure a reading is shown
+- **Smart Finger Removal Detection** - Tracks brightness changes to detect when finger is lifted
 
 ### Tech Stack
 
-- **Language**: Kotlin
-- **Camera**: AndroidX CameraX (Camera2 API)
-- **UI**: Material Components 3, ConstraintLayout
-- **Async**: Kotlin Coroutines
-- **Sound**: ToneGenerator (NOTIFICATION stream)
-- **Build**: Gradle 9.2.1, AGP 8.7.3
+| Component | Technology |
+|-----------|------------|
+| Language | Kotlin |
+| Camera | AndroidX CameraX (Camera2 API) |
+| UI | Material Components 3, ConstraintLayout |
+| Animations | Lottie 6.3.0 |
+| Database | Room 2.6.1 |
+| Async | Kotlin Coroutines |
+| Sound | ToneGenerator |
+| Build | Gradle 9.2.1, AGP 8.7.3 |
 
-## 🏗️ Building & Installation
+### Dependencies
+
+```kotlin
+// CameraX
+implementation("androidx.camera:camera-camera2:1.3.1")
+implementation("androidx.camera:camera-lifecycle:1.3.1")
+implementation("androidx.camera:camera-view:1.3.1")
+
+// Lottie for animations
+implementation("com.airbnb.android:lottie:6.3.0")
+
+// Room for local database
+implementation("androidx.room:room-runtime:2.6.1")
+implementation("androidx.room:room-ktx:2.6.1")
+ksp("androidx.room:room-compiler:2.6.1")
+
+// Coroutines & Lifecycle
+implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+
+// Material Design
+implementation("com.google.android.material:material:1.11.0")
+```
+
+## Building & Installation
 
 ### Debug Build (Development)
 
@@ -111,7 +162,7 @@ A professional Android app that measures your heart rate using your phone's came
 ./gradlew assembleDebug
 
 # Install on connected device
-adb install app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 # Or install directly
 ./gradlew installDebug
@@ -128,108 +179,74 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
 **Output files**:
-- AAB: `app/build/outputs/bundle/release/app-release.aab` (3.1 MB)
-- APK: `app/build/outputs/apk/release/app-release.apk` (2.2 MB)
+- AAB: `app/build/outputs/bundle/release/app-release.aab`
+- APK: `app/build/outputs/apk/release/app-release.apk`
 
-### Build Configuration
-
-- **Signing**: Pre-configured with release keystore
-- **ProGuard**: Enabled (code shrinking & optimization)
-- **Resource Shrinking**: Enabled (removes unused resources)
-
-## 📂 Project Structure
+## Project Structure
 
 ```
 app/src/main/
 ├── java/com/example/heartratemonitor/
-│   └── MainActivity.kt              # 770 lines - Complete PPG implementation
+│   ├── MainActivity.kt           # Main screen with PPG measurement
+│   ├── HistoryActivity.kt        # History screen with stats
+│   ├── ECGWaveformView.kt        # Custom ECG visualization view
+│   └── data/
+│       └── HeartRateDatabase.kt  # Room database & entities
 ├── res/
 │   ├── layout/
-│   │   └── activity_main.xml        # Modern UI with camera-in-heart design
-│   ├── drawable/
-│   │   ├── gradient_background.xml  # App background gradient
-│   │   ├── heart_glow_border.xml    # Heart circle with glow
-│   │   ├── pulse_indicator_background.xml
-│   │   ├── status_background.xml
-│   │   └── ... (11 drawable resources)
-│   ├── values/
-│   │   └── themes.xml               # Material Components theme
-│   └── mipmap-*/
-│       └── ic_launcher.png          # App icons (all densities)
-└── AndroidManifest.xml              # Camera permissions
+│   │   ├── activity_main.xml     # Main UI with camera-in-heart
+│   │   ├── activity_history.xml  # History screen layout
+│   │   └── item_history.xml      # History list item
+│   ├── drawable/                 # 15+ custom drawables
+│   │   ├── gradient_background.xml
+│   │   ├── heart_glow_border.xml
+│   │   ├── ecg_background.xml
+│   │   ├── stats_card_background.xml
+│   │   └── ...
+│   ├── raw/                      # Lottie animations
+│   │   ├── heartbeat.json        # Heart pulse animation
+│   │   └── loading_pulse.json    # ECG loading animation
+│   └── values/
+│       └── themes.xml            # Material theme + dialog styles
+└── AndroidManifest.xml           # Permissions & activities
 ```
 
-## 🎨 UI Design Highlights
+## UI Design
 
-- **Gradient Background** - Sophisticated diagonal gradient
-- **Camera-in-Heart** - Live camera feed shows inside heart circle with glowing border
+- **Gradient Background** - Sophisticated diagonal dark gradient
+- **Camera-in-Heart** - Live camera feed inside heart circle with glowing border
+- **ECG Waveform** - Green ECG-style graph with grid background
+- **Lottie Heart** - Smooth pulsing animation during measurement
 - **Glowing Effects** - Red glow on heart, green glow on pulse indicator
-- **Typography** - Multiple font weights, letter spacing, shadows
-- **Elevation & Depth** - 3D appearance with shadows
-- **Modern Title** - "❤️ HEART RATE" with decorative underline
-- **Card Design** - Status text in elevated rounded card
-- **Premium Feel** - Medical-grade professional appearance
+- **Stats Cards** - Color-coded statistics (green/blue/red/gold)
+- **Dark Theme** - Easy on the eyes, medical device aesthetic
 
-## 📊 Algorithm Performance
+## Algorithm Performance
 
-- **Detection Time**: 1 second baseline + 1 second finger detection
-- **Measurement Duration**: 10 seconds (300 frames @ 30fps)
-- **Update Frequency**: BPM updates every 1 second during measurement
-- **Heartbeat Lag**: ~0.1 seconds (minimal delay)
-- **Accuracy Range**: 45-180 BPM (validated), 30-220 BPM (displayed with warning)
-- **Minimum Data**: Shows reading with as few as 3 seconds of data
+| Metric | Value |
+|--------|-------|
+| Detection Time | 1s baseline + 1s finger detection |
+| Measurement Duration | 10 seconds (300 frames @ 30fps) |
+| Update Frequency | BPM updates every 1 second |
+| Heartbeat Lag | ~0.1 seconds |
+| Accuracy Range | 40-200 BPM (validated) |
+| Extended Range | 30-220 BPM (with warning) |
+| Minimum Data | Shows reading with 3+ seconds of data |
 
-## 🔧 Development
+## Requirements
 
-### Requirements
+- Android 7.0 (API 24) or higher
+- Rear camera with flash LED
+- ~5 MB storage space
+
+## Development Requirements
 
 - Android Studio Arctic Fox or later
 - JDK 11 or higher
 - Android SDK 34
 - Gradle 9.2.1
 
-### Dependencies
-
-```kotlin
-// CameraX
-implementation("androidx.camera:camera-camera2:1.3.1")
-implementation("androidx.camera:camera-lifecycle:1.3.1")
-implementation("androidx.camera:camera-view:1.3.1")
-
-// Coroutines
-implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-
-// Material Design
-implementation("com.google.android.material:material:1.11.0")
-```
-
-### Clean Build
-
-```bash
-./gradlew clean
-./gradlew assembleDebug -x lint -x test --no-configuration-cache
-```
-
-## 🚀 Publishing to Play Store
-
-See `PLAY_STORE_PUBLISHING.md` for detailed instructions.
-
-**Quick checklist**:
-- ✅ Release AAB built and signed
-- ✅ App icons prepared (all densities)
-- ⚠️ Need privacy policy URL
-- ⚠️ Need screenshots (4-5 recommended)
-- ⚠️ Need feature graphic (1024x500)
-
-## 📸 Screenshots
-
-Take screenshots using:
-```bash
-adb shell screencap -p /sdcard/screenshot.png
-adb pull /sdcard/screenshot.png
-```
-
-## ⚠️ Important Notes
+## Important Notes
 
 ### Disclaimer
 
@@ -240,9 +257,9 @@ adb pull /sdcard/screenshot.png
 
 ### Privacy
 
-- **No data collection** - Everything processed locally
+- **Local storage only** - All data stays on your device
 - **No internet required** - Works completely offline
-- **No storage** - Results not saved (unless you screenshot)
+- **No data collection** - We don't collect any information
 - **Camera only** - Used solely for heart rate detection
 
 ### Known Limitations
@@ -251,41 +268,38 @@ adb pull /sdcard/screenshot.png
 - Accuracy may vary by device
 - Movement reduces accuracy
 - Room lighting can affect calibration
-- Some skin tones may need adjustment
 
-## 🎯 Future Enhancements
+## Future Enhancements
 
-Potential improvements:
-- [ ] Measurement history with charts
-- [ ] Export readings (CSV, PDF)
 - [ ] Heart rate variability (HRV) analysis
-- [ ] Real-time signal graph display
+- [ ] Export readings (CSV, PDF)
 - [ ] Multiple user profiles
-- [ ] Trends and statistics
 - [ ] Share results
-- [ ] Dark/Light theme toggle
-- [ ] Advanced filtering (Butterworth, FFT)
+- [ ] Trends and insights
+- [ ] Widgets for quick access
+- [ ] Wear OS companion app
 
-## 🤝 Contributing
+## Contributing
 
 This is a personal project, but suggestions are welcome! Open an issue or PR.
 
-## 📄 License
+## License
 
 This project is for educational and personal use.
 
-## 👨‍💻 Author
+## Author
 
-Built with ❤️ using Android & Kotlin
+Built with Kotlin & Android
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - PPG technology based on research in optical heart rate monitoring
+- Lottie animations by Airbnb
 - UI design inspired by modern medical devices
 - Built with AndroidX CameraX library
 
 ---
 
-**Made with ❤️ and lots of ☕**
+**Made with care**
 
 *For questions or issues, please open a GitHub issue.*

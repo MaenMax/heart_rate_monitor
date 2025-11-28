@@ -6,6 +6,7 @@ agp = "8.7.3"
 kotlin = "2.0.21"
 guava = "33.4.6-jre"
 junit = "4.13.2"
+ksp = "2.0.21-1.0.27"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
@@ -14,3 +15,4 @@ junit = { module = "junit:junit", version.ref = "junit" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
