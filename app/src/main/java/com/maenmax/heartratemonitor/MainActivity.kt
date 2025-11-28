@@ -1,4 +1,4 @@
-package com.example.heartratemonitor
+package com.maenmax.heartratemonitor
 
 import android.Manifest
 import android.animation.ObjectAnimator
@@ -22,8 +22,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.airbnb.lottie.LottieAnimationView
-import com.example.heartratemonitor.data.HeartRateDatabase
-import com.example.heartratemonitor.data.HeartRateMeasurement
+import com.maenmax.heartratemonitor.data.HeartRateDatabase
+import com.maenmax.heartratemonitor.data.HeartRateMeasurement
 import kotlinx.coroutines.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors

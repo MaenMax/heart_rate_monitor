@@ -1,4 +1,4 @@
-package com.example.heartratemonitor
+package com.maenmax.heartratemonitor
 
 import android.content.Context
 import android.graphics.*

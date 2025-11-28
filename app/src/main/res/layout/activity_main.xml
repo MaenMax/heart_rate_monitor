@@ -143,7 +143,7 @@
     </FrameLayout>
 
     <!-- ECG Waveform View -->
-    <com.example.heartratemonitor.ECGWaveformView
+    <com.maenmax.heartratemonitor.ECGWaveformView
         android:id="@+id/ecgWaveformView"
         android:layout_width="match_parent"
         android:layout_height="80dp"

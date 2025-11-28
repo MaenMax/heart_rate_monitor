@@ -1,4 +1,4 @@
-package com.example.heartratemonitor
+package com.maenmax.heartratemonitor
 
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -11,8 +11,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.example.heartratemonitor.data.HeartRateDatabase
-import com.example.heartratemonitor.data.HeartRateMeasurement
+import com.maenmax.heartratemonitor.data.HeartRateDatabase
+import com.maenmax.heartratemonitor.data.HeartRateMeasurement
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch

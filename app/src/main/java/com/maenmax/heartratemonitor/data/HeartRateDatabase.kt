@@ -1,4 +1,4 @@
-package com.example.heartratemonitor.data
+package com.maenmax.heartratemonitor.data
 
 import android.content.Context
 import androidx.room.*
