@@ -12,8 +12,8 @@ android {
         applicationId = "com.maenmax.heartratemonitor"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -81,4 +81,10 @@ dependencies {
     // Navigation
     implementation("androidx.navigation:navigation-fragment-ktx:2.7.6")
     implementation("androidx.navigation:navigation-ui-ktx:2.7.6")
+
+    // Google AdMob
+    implementation("com.google.android.gms:play-services-ads:23.0.0")
+
+    // Guava for ListenableFuture (resolves CameraX + AdMob conflict)
+    implementation("com.google.guava:guava:31.1-android")
 }

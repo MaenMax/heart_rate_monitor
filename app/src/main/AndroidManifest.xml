@@ -7,6 +7,12 @@
         android:label="Heart Rate Monitor"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.HeartRateMonitor">
+
+        <!-- AdMob App ID -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-1253688971094784~2138873908" />
+
         <activity android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"

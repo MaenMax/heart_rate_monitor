@@ -7,8 +7,6 @@ import android.content.pm.PackageManager
 import android.graphics.Outline
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import android.media.ToneGenerator
-import android.media.AudioManager
 import android.os.Bundle
 import android.view.View
 import android.view.ViewOutlineProvider
@@ -28,6 +26,9 @@ import kotlinx.coroutines.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
 
 class MainActivity : AppCompatActivity() {
     
@@ -42,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var ecgWaveformView: ECGWaveformView
     private lateinit var heartLottie: LottieAnimationView
     private lateinit var loadingAnimation: LottieAnimationView
+    private lateinit var adView: AdView
 
     private lateinit var database: HeartRateDatabase
     private var lastConfidence: String = "Good"
@@ -52,22 +54,17 @@ class MainActivity : AppCompatActivity() {
     private var isMeasuring = false
     private var isFingerDetected = false
     
-    // Sound effects
-    private var toneGenerator: ToneGenerator? = null
-    private var lastHeartbeatTime = 0L
-    private val MIN_HEARTBEAT_INTERVAL = 400L  // Minimum 400ms between heartbeats (max 150 BPM) - prevents double triggers
+    // Unified heartbeat controller for perfect sync
+    private var heartbeatController: HeartbeatController? = null
+    private var heartbeatSoundPlayer: HeartbeatSoundPlayer? = null  // For completion sound only
     private var isSoundMuted = false
 
-    // Beat detection state - tracks signal state machine
-    private var beatState = BeatState.WAITING_FOR_LOW
-    private var recentLow = Float.MAX_VALUE
-    private var recentHigh = Float.MIN_VALUE
+    // Heart rate processor for stable BPM calculation and beat detection
+    private val heartRateProcessor = HeartRateProcessor()
 
-    private enum class BeatState {
-        WAITING_FOR_LOW,   // Waiting for signal to go below baseline
-        WAITING_FOR_RISE   // Signal is low, waiting for it to rise
-    }
-    
+    // Finger detector for robust finger verification
+    private val fingerDetector = FingerDetector()
+
     // Heart rate detection variables
     private val redValues = mutableListOf<Float>()
     private var frameCount = 0
@@ -78,22 +75,16 @@ class MainActivity : AppCompatActivity() {
     // Frame timing for accurate FPS measurement
     private var firstFrameTimestamp = 0L
     private var lastFrameTimestamp = 0L
-    
-    // Finger detection
-    private var baselineBrightness: Float = 0f
-    private var brightnessReadings = mutableListOf<Float>()
-    private val BASELINE_SAMPLE_SIZE = 30  // ~1 second at 30fps
-    private var sustainedFingerContact = 0
-    private val SUSTAINED_THRESHOLD = 30  // Need 30 consecutive changed frames (~1 second)
-    private var isFingerCurrentlyOnCamera = false
-    
-    // Interruption detection (to prevent false cancellations)
-    private var consecutiveFingerOffFrames = 0
-    private val FINGER_OFF_THRESHOLD = 5  // Need 5 consecutive frames (~0.17 second) to confirm finger is really off
+
+    // Track red/green for finger detection
+    private var lastRedIntensity = 0f
+    private var lastGreenIntensity = 0f
 
     // Track brightness during measurement to detect finger removal
     private var measurementBrightnessSum = 0f
     private var measurementBrightnessCount = 0
+    private var measurementRedSum = 0f
+    private var measurementRedCount = 0
     
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var pulseAnimationJob: Job? = null
@@ -139,6 +130,7 @@ class MainActivity : AppCompatActivity() {
         // Mute button click listener
         muteButton.setOnClickListener {
             isSoundMuted = !isSoundMuted
+            heartbeatController?.isMuted = isSoundMuted
             muteButton.text = if (isSoundMuted) "🔇" else "🔊"
         }
 
@@ -146,17 +138,21 @@ class MainActivity : AppCompatActivity() {
         historyButton.setOnClickListener {
             startActivity(Intent(this, HistoryActivity::class.java))
         }
-        
-        // Initialize sound generator with higher volume
+
+        // Initialize AdMob
+        MobileAds.initialize(this) {}
+        adView = findViewById(R.id.adView)
+        val adRequest = AdRequest.Builder().build()
+        adView.loadAd(adRequest)
+
+        // Initialize unified heartbeat controller (sound + animation + ECG in perfect sync)
+        heartbeatController = HeartbeatController(heartIcon, ecgWaveformView)
+
+        // Initialize completion sound player (for end of measurement)
         try {
-            toneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90)  // 90% volume, notification stream
+            heartbeatSoundPlayer = HeartbeatSoundPlayer()
         } catch (e: Exception) {
-            // Try alternative stream if it fails
-            try {
-                toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 90)
-            } catch (e2: Exception) {
-                Toast.makeText(this, "Sound may not work on this device", Toast.LENGTH_SHORT).show()
-            }
+            Toast.makeText(this, "Sound may not work on this device", Toast.LENGTH_SHORT).show()
         }
         
         if (allPermissionsGranted()) {
@@ -177,12 +173,14 @@ class MainActivity : AppCompatActivity() {
         frameCount = 0
         firstFrameTimestamp = 0L
         lastFrameTimestamp = 0L
-        beatState = BeatState.WAITING_FOR_LOW
-        recentLow = Float.MAX_VALUE
-        recentHigh = Float.MIN_VALUE
         measurementBrightnessSum = 0f
         measurementBrightnessCount = 0
-        consecutiveFingerOffFrames = 0
+        measurementRedSum = 0f
+        measurementRedCount = 0
+
+        // Reset heart rate processor
+        heartRateProcessor.reset()
+
         // Don't clear heart rate text - keep previous reading until new one is ready
         statusText.text = "Measuring... Keep your finger steady"
 
@@ -199,10 +197,13 @@ class MainActivity : AppCompatActivity() {
         ecgWaveformView.clearData()
         ecgWaveformView.startAnimation()
 
-        // Show Lottie heartbeat animation, hide emoji
-        heartIcon.visibility = View.GONE
-        heartLottie.visibility = View.VISIBLE
-        heartLottie.playAnimation()
+        // Use heartIcon for beat animation (controlled by HeartbeatController)
+        // Hide Lottie - we control the heart icon directly for perfect sync
+        heartLottie.visibility = View.GONE
+        heartIcon.visibility = View.VISIBLE
+
+        // Start the heartbeat controller
+        heartbeatController?.start()
 
         // Cancel any existing timeout job
         measurementTimeoutJob?.cancel()
@@ -220,13 +221,16 @@ class MainActivity : AppCompatActivity() {
     private fun stopMeasuring() {
         isMeasuring = false
         isFingerDetected = false
-        sustainedFingerContact = 0
-        isFingerCurrentlyOnCamera = false
-        consecutiveFingerOffFrames = 0  // Reset interruption counter
 
         // Cancel timeout to prevent race condition
         measurementTimeoutJob?.cancel()
         measurementTimeoutJob = null
+
+        // Stop heartbeat controller
+        heartbeatController?.stop()
+
+        // Reset finger detector for next measurement (keep calibration)
+        fingerDetector.resetForNextMeasurement()
 
         // Don't change status text here - let the caller set appropriate message
 
@@ -237,10 +241,8 @@ class MainActivity : AppCompatActivity() {
         // Hide pulse indicator
         hidePulseIndicator()
 
-        // Stop ECG waveform and Lottie animations
+        // Stop ECG waveform
         ecgWaveformView.stopAnimation()
-        heartLottie.cancelAnimation()
-        heartLottie.visibility = View.GONE
         heartIcon.visibility = View.VISIBLE
     }
     
@@ -491,11 +493,22 @@ class MainActivity : AppCompatActivity() {
             statusText.text = "✓ $heartRate BPM ($confidenceLabel) | Tap to measure again"
             animateHeartbeat()
 
+            // Play completion sound (high-pitched beep-beep)
+            if (!isSoundMuted) {
+                heartbeatSoundPlayer?.playCompletionBeep()
+            }
+
             // Save measurement to database
             saveMeasurement(heartRate, confidenceLabel)
         } else if (heartRate in 30..220) {
             heartRateText.text = heartRate.toString()
             statusText.text = "⚠ $heartRate BPM (unusual range, please retry)"
+
+            // Play completion sound even for unusual readings
+            if (!isSoundMuted) {
+                heartbeatSoundPlayer?.playCompletionBeep()
+            }
+
             saveMeasurement(heartRate, "Low confidence")
         } else {
             heartRateText.text = "--"
@@ -781,12 +794,13 @@ class MainActivity : AppCompatActivity() {
     }
     
     private inner class HeartRateAnalyzer : ImageAnalysis.Analyzer {
+        private var consecutiveFingerOffFrames = 0
+        private val FINGER_OFF_THRESHOLD = 5
+
         override fun analyze(image: ImageProxy) {
             val currentTimestamp = System.currentTimeMillis()
 
-            // Extract RED channel from YUV_420_888 format
-            // In YUV, we need to convert to RGB to get the red channel
-            // Red = Y + 1.402 * (V - 128)
+            // Extract RED and GREEN channels from YUV_420_888 format
             val yBuffer = image.planes[0].buffer
             val uBuffer = image.planes[1].buffer
             val vBuffer = image.planes[2].buffer
@@ -804,12 +818,12 @@ class MainActivity : AppCompatActivity() {
             val uvPixelStride = image.planes[1].pixelStride
             val uvRowStride = image.planes[1].rowStride
 
-            // Calculate average RED channel value (sample center region for better signal)
+            // Calculate average RED and GREEN channel values
             var redSum = 0.0
+            var greenSum = 0.0
             var sampleCount = 0
-            val step = 8  // Sample every 8th pixel for performance
+            val step = 8
 
-            // Focus on center 50% of image for better finger coverage
             val startX = width / 4
             val endX = width * 3 / 4
             val startY = height / 4
@@ -820,236 +834,138 @@ class MainActivity : AppCompatActivity() {
                     val yIndex = y * width + x
                     val uvIndex = (y / 2) * uvRowStride + (x / 2) * uvPixelStride
 
-                    if (yIndex < yData.size && uvIndex < vData.size) {
+                    if (yIndex < yData.size && uvIndex < vData.size && uvIndex < uData.size) {
                         val yValue = (yData[yIndex].toInt() and 0xFF).toFloat()
+                        val uValue = (uData[uvIndex].toInt() and 0xFF).toFloat()
                         val vValue = (vData[uvIndex].toInt() and 0xFF).toFloat()
 
-                        // Convert to Red channel: R = Y + 1.402 * (V - 128)
+                        // Convert to RGB
+                        // R = Y + 1.402 * (V - 128)
+                        // G = Y - 0.344 * (U - 128) - 0.714 * (V - 128)
                         val red = yValue + 1.402f * (vValue - 128f)
+                        val green = yValue - 0.344f * (uValue - 128f) - 0.714f * (vValue - 128f)
+
                         redSum += red.coerceIn(0f, 255f)
+                        greenSum += green.coerceIn(0f, 255f)
                         sampleCount++
                     }
                 }
             }
 
             val avgRedIntensity = if (sampleCount > 0) (redSum / sampleCount).toFloat() else 0f
+            val avgGreenIntensity = if (sampleCount > 0) (greenSum / sampleCount).toFloat() else 0f
 
-            // Also calculate brightness for finger detection (using Y plane)
+            // Calculate brightness (Y plane average)
             var brightnessSum = 0L
             val brightnessStep = 10
             for (i in yData.indices step brightnessStep) {
                 brightnessSum += (yData[i].toInt() and 0xFF)
             }
-            val avgIntensity = brightnessSum.toFloat() / (yData.size / brightnessStep)
-            
-            // Finger detection logic
+            val avgBrightness = brightnessSum.toFloat() / (yData.size / brightnessStep)
+
+            // Store for later use
+            lastRedIntensity = avgRedIntensity
+            lastGreenIntensity = avgGreenIntensity
+
+            // Finger detection using new robust detector
             if (!isMeasuring) {
-                // Build baseline (camera with flash on, no finger)
-                if (brightnessReadings.size < BASELINE_SAMPLE_SIZE) {
-                    brightnessReadings.add(avgIntensity)
-                    
-                    // Check if values are stable and bright enough (no finger on camera)
-                    if (brightnessReadings.size >= 10) {
-                        val recent = brightnessReadings.takeLast(10)
-                        val recentAvg = recent.average().toFloat()
-                        val variance = recent.map { (it - recentAvg) * (it - recentAvg) }.average()
-                        
-                        // If variance is too high, someone is moving/touching - restart
-                        if (variance > 200) {
-                            brightnessReadings.clear()
-                            runOnUiThread {
-                                statusText.text = "Keep finger OFF! Moving detected - restarting..."
-                            }
-                            image.close()
-                            return
-                        }
-                        
-                        // If brightness is too low, finger might be covering camera - restart
-                        if (recentAvg < 70) {
-                            brightnessReadings.clear()
-                            runOnUiThread {
-                                statusText.text = "Too dark! Remove finger from camera!"
-                            }
-                            image.close()
-                            return
-                        }
-                    }
-                    
-                    if (brightnessReadings.size == BASELINE_SAMPLE_SIZE) {
-                        baselineBrightness = brightnessReadings.average().toFloat()
-                        
-                        // Final check: baseline should be reasonably bright (flash is on, no finger)
-                        if (baselineBrightness < 70) {
-                            brightnessReadings.clear()
-                            runOnUiThread {
-                                statusText.text = "Calibration failed! Remove finger and restart app"
-                            }
-                        } else {
-                            runOnUiThread {
-                                statusText.text = "Ready! NOW place your finger on camera"
-                            }
-                        }
-                    } else {
-                        val progress = (brightnessReadings.size * 100 / BASELINE_SAMPLE_SIZE)
-                        runOnUiThread {
-                            statusText.text = "Calibrating... $progress% (Keep finger OFF)"
-                        }
-                    }
-                } else {
-                    // Check if finger is covering camera
-                    val brightnessDiff = avgIntensity - baselineBrightness
-                    val absDiff = abs(brightnessDiff)
-                    
-                    // Finger is on camera if brightness differs significantly from baseline
-                    val fingerIsOn = absDiff > 25  // More lenient threshold
-                    
-                    if (fingerIsOn) {
-                        isFingerCurrentlyOnCamera = true
-                        sustainedFingerContact++
-                        
-                        runOnUiThread {
-                            statusText.text = "Detecting... ${sustainedFingerContact}/${SUSTAINED_THRESHOLD} | Base:${baselineBrightness.toInt()} Cur:${avgIntensity.toInt()} Diff:${absDiff.toInt()}"
-                        }
-                        
-                        // Start measuring after sustained contact
-                        if (sustainedFingerContact >= SUSTAINED_THRESHOLD && !isFingerDetected) {
-                            isFingerDetected = true
-                            runOnUiThread {
-                                startMeasuring()
-                            }
-                        }
-                    } else {
-                        // Finger not on camera (back to baseline)
-                        if (isFingerCurrentlyOnCamera) {
-                            // Finger was just removed
-                            isFingerCurrentlyOnCamera = false
-                        }
-                        sustainedFingerContact = 0
-                        
-                        // Show current values for debugging
-                        runOnUiThread {
-                            statusText.text = "Ready! (Base:${baselineBrightness.toInt()} Cur:${avgIntensity.toInt()} Diff:${absDiff.toInt()})"
-                        }
+                val detectionState = fingerDetector.processFrame(avgRedIntensity, avgGreenIntensity, avgBrightness)
+
+                runOnUiThread {
+                    statusText.text = fingerDetector.getStatusMessage()
+                }
+
+                // Start measuring when finger is confirmed with pulse
+                if (detectionState == FingerDetector.DetectionState.FINGER_CONFIRMED && !isFingerDetected) {
+                    isFingerDetected = true
+                    runOnUiThread {
+                        startMeasuring()
                     }
                 }
             } else if (frameCount < REQUIRED_FRAMES) {
-                // Measuring mode - collect RED channel data (not luminance)
+                // ===== MEASURING MODE =====
+
+                // Collect signal data
                 redValues.add(avgRedIntensity)
                 frameCount++
 
-                // Track timestamps for accurate FPS calculation
+                // Track timestamps for FPS calculation
                 if (firstFrameTimestamp == 0L) {
                     firstFrameTimestamp = currentTimestamp
                 }
                 lastFrameTimestamp = currentTimestamp
 
-                // Calculate actual FPS periodically
+                // Update FPS measurement
                 if (frameCount > 30) {
                     val elapsedSeconds = (lastFrameTimestamp - firstFrameTimestamp) / 1000f
                     if (elapsedSeconds > 0) {
                         measuredFramesPerSecond = frameCount / elapsedSeconds
+                        heartRateProcessor.setFPS(measuredFramesPerSecond)
                     }
                 }
-                
-                // Real-time heartbeat detection using state machine
-                // Triggers IMMEDIATELY on the frame where we see significant brightness jump
-                val currentTime = System.currentTimeMillis()
-                val currentValue = avgRedIntensity
 
-                // Track min/max for adaptive threshold
-                if (currentValue < recentLow) recentLow = currentValue
-                if (currentValue > recentHigh) recentHigh = currentValue
+                // Process sample for beat detection (sets flag if beat detected)
+                heartRateProcessor.processSample(avgRedIntensity, currentTimestamp)
 
-                // Need some range established first
-                val signalRange = recentHigh - recentLow
-                if (signalRange > 0.5f && redValues.size >= 5) {
-                    // Dynamic threshold at 40% of the way from low to high
-                    val threshold = recentLow + signalRange * 0.4f
-
-                    when (beatState) {
-                        BeatState.WAITING_FOR_LOW -> {
-                            // Wait for signal to drop below threshold
-                            if (currentValue < threshold) {
-                                beatState = BeatState.WAITING_FOR_RISE
-                            }
-                        }
-                        BeatState.WAITING_FOR_RISE -> {
-                            // Trigger beat when signal rises above threshold
-                            if (currentValue > threshold) {
-                                val timeSinceLastBeat = currentTime - lastHeartbeatTime
-
-                                if (timeSinceLastBeat > MIN_HEARTBEAT_INTERVAL) {
-                                    lastHeartbeatTime = currentTime
-                                    runOnUiThread {
-                                        onHeartbeatDetected()
-                                    }
-                                }
-
-                                // Go back to waiting for low
-                                beatState = BeatState.WAITING_FOR_LOW
-
-                                // Slowly decay the range to adapt to signal changes
-                                recentLow = recentLow + signalRange * 0.1f
-                                recentHigh = recentHigh - signalRange * 0.1f
-                            }
-                        }
+                // Check for beat on UI thread and trigger PERFECTLY synchronized animation/sound/ECG
+                // Using HeartbeatController ensures all three fire in the SAME instant
+                runOnUiThread {
+                    if (heartRateProcessor.checkAndConsumeBeat()) {
+                        heartbeatController?.triggerBeat()  // Atomic: Sound + Animation + ECG together!
                     }
                 }
-                
-                // REAL-TIME HEART RATE DISPLAY - Update frequently!
-                // Show heart rate as soon as we have enough data and keep updating
-                if (frameCount >= 90 && frameCount % 30 == 0) {  // Every second after 3 seconds
-                    val currentHR = calculateRealtimeHeartRate()
-                    if (currentHR != null) {
+
+                // Update BPM display periodically
+                if (frameCount >= 90 && frameCount % 30 == 0) {
+                    val stableBPM = heartRateProcessor.calculateStableBPM(redValues)
+                    if (stableBPM != null && heartRateProcessor.hasReliableBPM()) {
                         runOnUiThread {
-                            heartRateText.text = currentHR.toString()
+                            heartRateText.text = stableBPM.toString()
                         }
                     }
                 }
-                
-                // Track average brightness during measurement (with finger on)
-                measurementBrightnessSum += avgIntensity
-                measurementBrightnessCount++
-                val avgMeasurementBrightness = measurementBrightnessSum / measurementBrightnessCount
 
-                // Update progress with signal quality feedback
+                // Track measurement averages for finger removal detection
+                measurementBrightnessSum += avgBrightness
+                measurementBrightnessCount++
+                measurementRedSum += avgRedIntensity
+                measurementRedCount++
+
+                val avgMeasurementBrightness = measurementBrightnessSum / measurementBrightnessCount
+                val avgMeasurementRed = measurementRedSum / measurementRedCount
+
+                // Update progress display
                 val progress = (frameCount * 100 / REQUIRED_FRAMES)
                 val qualityIndicator = if (redValues.size >= 60) {
                     val quality = calculateSignalQuality()
                     when {
-                        quality >= 0.8f -> "●●●"  // Excellent signal
-                        quality >= 0.5f -> "●●○"  // Good signal
-                        quality >= 0.3f -> "●○○"  // Weak signal
-                        else -> "○○○"            // Poor signal
+                        quality >= 0.8f -> "●●●"
+                        quality >= 0.5f -> "●●○"
+                        quality >= 0.3f -> "●○○"
+                        else -> "○○○"
                     }
-                } else {
-                    "..."
-                }
+                } else "..."
+
                 runOnUiThread {
                     statusText.text = "Measuring $progress% | Signal: $qualityIndicator"
                 }
 
-                // Check if finger removed - finger removal causes brightness to INCREASE significantly
-                // When finger is on camera with flash: brightness is LOW (finger blocks/absorbs light)
-                // When finger is removed: brightness goes HIGH (back toward baseline)
-                val brightnessIncrease = avgIntensity - avgMeasurementBrightness
-                val diffFromBaseline = abs(avgIntensity - baselineBrightness)
+                // Check for finger removal using both brightness AND red channel
+                val redDropped = avgRedIntensity < avgMeasurementRed * 0.7f  // Red dropped significantly
+                val brightnessJumped = avgBrightness > avgMeasurementBrightness + 25  // Brightness jumped
+                val redRatio = if (avgGreenIntensity > 0) avgRedIntensity / avgGreenIntensity else 0f
+                val lostRedDominance = redRatio < 1.1f  // Lost red dominance (finger removed)
 
-                // Finger is likely removed if:
-                // 1. Current brightness is much higher than average during measurement (>20 increase), OR
-                // 2. Current brightness is very close to baseline (within 15)
-                val fingerLikelyRemoved = brightnessIncrease > 20 || diffFromBaseline < 15
+                val fingerLikelyRemoved = redDropped || brightnessJumped || lostRedDominance
 
                 if (fingerLikelyRemoved) {
                     consecutiveFingerOffFrames++
-
                     if (consecutiveFingerOffFrames >= FINGER_OFF_THRESHOLD) {
                         val partialReading = calculatePartialHeartRate()
                         runOnUiThread {
                             if (partialReading != null) {
                                 heartRateText.text = "~$partialReading"
-                                val progressMsg = if (progress >= 80) "Almost done!" else "Interrupted!"
-                                statusText.text = "$progressMsg Partial: ~$partialReading BPM | Place finger to retry"
+                                statusText.text = "Finger removed. Partial: ~$partialReading BPM"
                             } else {
                                 statusText.text = "Finger removed. Place finger again."
                             }
@@ -1058,11 +974,10 @@ class MainActivity : AppCompatActivity() {
                         consecutiveFingerOffFrames = 0
                     }
                 } else {
-                    // Finger is still on camera, reset counter
                     consecutiveFingerOffFrames = 0
                 }
             }
-            
+
             image.close()
         }
     }
@@ -1084,74 +999,6 @@ class MainActivity : AppCompatActivity() {
                 finish()
             }
         }
-    }
-    
-    private fun onHeartbeatDetected() {
-        // Synchronized heartbeat effects - sound + animation together
-        playHeartbeatSound()
-        animateHeartPulse()
-
-        // Trigger ECG waveform beat
-        ecgWaveformView.onHeartbeat()
-    }
-    
-    private fun playHeartbeatSound() {
-        if (isSoundMuted) return
-        
-        try {
-            // Force stop any previous tone
-            toneGenerator?.stopTone()
-            // Play a short beep tone (similar to medical devices)
-            // Using DTMF tone '8' which is a higher pitch beep
-            toneGenerator?.startTone(ToneGenerator.TONE_DTMF_8, 80)  // 80ms duration, louder
-        } catch (e: Exception) {
-            // If tone generator fails, try to recreate it
-            try {
-                toneGenerator?.release()
-                toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 80)  // 80% volume
-                toneGenerator?.startTone(ToneGenerator.TONE_DTMF_8, 80)
-            } catch (e2: Exception) {
-                // Sound completely failed
-            }
-        }
-    }
-    
-    private fun animateHeartPulse() {
-        // Animate both color AND scale for dramatic, synchronized effect with sound
-        // Duration matches the beep sound (50ms beep + 150ms fade = 200ms total)
-        val colorAnimator = android.animation.ValueAnimator.ofFloat(0f, 1f, 0f)
-        colorAnimator.duration = 200  // Synchronized with sound timing
-        
-        colorAnimator.addUpdateListener { animator ->
-            val fraction = animator.animatedValue as Float
-            
-            // Very dramatic color change for clear visibility
-            // Start: #FF6B6B (bright red), Peak: #8B0000 (dark red)
-            val startColor = 0xFF6B6B
-            val peakColor = 0x8B0000
-            
-            val r1 = (startColor shr 16) and 0xFF
-            val g1 = (startColor shr 8) and 0xFF
-            val b1 = startColor and 0xFF
-            
-            val r2 = (peakColor shr 16) and 0xFF
-            val g2 = (peakColor shr 8) and 0xFF
-            val b2 = peakColor and 0xFF
-            
-            val r = (r1 + (r2 - r1) * fraction).toInt()
-            val g = (g1 + (g2 - g1) * fraction).toInt()
-            val b = (b1 + (b2 - b1) * fraction).toInt()
-            
-            val color = android.graphics.Color.rgb(r, g, b)
-            heartIcon.setTextColor(color)
-            
-            // Pulse the scale - quick expansion and contraction
-            val scale = 1f + (fraction * 0.2f)  // Scale up to 20% bigger for more visible effect
-            heartIcon.scaleX = scale
-            heartIcon.scaleY = scale
-        }
-        
-        colorAnimator.start()
     }
     
     override fun onPause() {
@@ -1181,11 +1028,9 @@ class MainActivity : AppCompatActivity() {
             camera?.cameraControl?.enableTorch(true)
             isFlashOn = true
 
-            // Reset calibration to ensure accurate baseline
-            brightnessReadings.clear()
-            baselineBrightness = 0f
-            sustainedFingerContact = 0
-            isFingerCurrentlyOnCamera = false
+            // Reset finger detector for fresh calibration
+            fingerDetector.reset()
+            isFingerDetected = false
             statusText.text = "Recalibrating... Keep finger OFF"
         }
     }
@@ -1196,7 +1041,8 @@ class MainActivity : AppCompatActivity() {
         pulseAnimationJob?.cancel()
         measurementTimeoutJob?.cancel()
         mainScope.cancel()
-        toneGenerator?.release()
+        heartbeatController?.release()  // Release unified heartbeat controller
+        heartbeatSoundPlayer?.release()
         camera?.cameraControl?.enableTorch(false)
     }
 }

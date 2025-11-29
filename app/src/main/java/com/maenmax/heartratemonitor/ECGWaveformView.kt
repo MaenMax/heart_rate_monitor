@@ -4,8 +4,11 @@ import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.View
-import kotlin.math.sin
 
+/**
+ * ECG Waveform visualization that is PURELY driven by onHeartbeat() calls.
+ * No internal timers - the waveform only spikes when a beat is detected.
+ */
 class ECGWaveformView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -40,26 +43,30 @@ class ECGWaveformView @JvmOverloads constructor(
     private val path = Path()
     private val glowPath = Path()
 
-    // Data points for the waveform
+    // Data points for the waveform (values from -1 to 1, 0 is baseline)
     private val dataPoints = mutableListOf<Float>()
-    private val maxDataPoints = 200
+    private val maxDataPoints = 150  // Points visible on screen
 
-    // Animation
-    private var offset = 0f
+    // Animation state
     private var isAnimating = false
-    private var lastBeatTime = 0L
-    private var beatInterval = 1000L // Default 60 BPM
+    private var scrollPosition = 0
 
-    // ECG pattern points (normalized 0-1)
-    private val ecgPattern = floatArrayOf(
-        0f, 0f, 0f, 0f, 0f,           // Baseline
-        0.02f, 0.05f, 0.02f, 0f,      // P wave
-        0f, 0f,                        // PR segment
-        -0.1f, 0.9f, -0.3f,           // QRS complex
-        0f, 0f, 0f,                    // ST segment
-        0.15f, 0.2f, 0.15f, 0.05f,    // T wave
-        0f, 0f, 0f, 0f, 0f            // Baseline
+    // ECG beat pattern (QRS complex + T wave)
+    // Values represent vertical displacement (-1 to 1)
+    private val ecgBeatPattern = listOf(
+        0f,                          // baseline
+        0.05f, 0.08f, 0.05f,        // small P wave
+        0f, 0f,                      // PR segment
+        -0.15f,                      // Q dip
+        1.0f,                        // R peak (main spike!)
+        -0.4f,                       // S dip
+        0f, 0f, 0f,                  // ST segment
+        0.2f, 0.25f, 0.2f, 0.1f,    // T wave
+        0f, 0f, 0f                   // return to baseline
     )
+
+    // How many baseline points to add between beats (controls scroll speed)
+    private val baselinePointsPerFrame = 2
 
     init {
         setLayerType(LAYER_TYPE_SOFTWARE, null) // Required for blur effect
@@ -67,103 +74,104 @@ class ECGWaveformView @JvmOverloads constructor(
 
     fun startAnimation() {
         isAnimating = true
-        invalidate()
+        // Initialize with baseline
+        dataPoints.clear()
+        for (i in 0 until maxDataPoints) {
+            dataPoints.add(0f)
+        }
+        scheduleNextFrame()
     }
 
     fun stopAnimation() {
         isAnimating = false
     }
 
-    fun setBPM(bpm: Int) {
-        if (bpm > 0) {
-            beatInterval = (60000L / bpm)
-        }
+    fun clearData() {
+        dataPoints.clear()
+        scrollPosition = 0
+        invalidate()
     }
 
+    /**
+     * Call this when a heartbeat is detected.
+     * This adds the ECG spike pattern to the waveform.
+     */
     fun onHeartbeat() {
-        lastBeatTime = System.currentTimeMillis()
-        // Add ECG pattern to data
-        addECGBeat()
-    }
+        if (!isAnimating) return
 
-    fun addDataPoint(value: Float) {
-        dataPoints.add(value)
-        if (dataPoints.size > maxDataPoints) {
+        // Add ECG beat pattern
+        for (point in ecgBeatPattern) {
+            dataPoints.add(point)
+        }
+
+        // Trim old data
+        while (dataPoints.size > maxDataPoints) {
             dataPoints.removeAt(0)
         }
-        if (isAnimating) {
-            invalidate()
-        }
+
+        invalidate()
     }
 
-    private fun addECGBeat() {
-        // Add ECG pattern points
-        for (point in ecgPattern) {
-            dataPoints.add(point)
-            if (dataPoints.size > maxDataPoints) {
-                dataPoints.removeAt(0)
+    private fun scheduleNextFrame() {
+        if (!isAnimating) return
+
+        postDelayed({
+            if (isAnimating) {
+                // Add baseline points to keep waveform scrolling
+                repeat(baselinePointsPerFrame) {
+                    dataPoints.add(0f)
+                    if (dataPoints.size > maxDataPoints) {
+                        dataPoints.removeAt(0)
+                    }
+                }
+                invalidate()
+                scheduleNextFrame()
             }
-        }
-        invalidate()
+        }, 33) // ~30 FPS
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        val width = width.toFloat()
-        val height = height.toFloat()
-        val centerY = height / 2
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val centerY = h / 2
+        val amplitude = h * 0.35f  // How tall the spikes are
 
         // Draw grid
-        drawGrid(canvas, width, height)
+        drawGrid(canvas, w, h)
 
-        if (dataPoints.isEmpty()) {
-            // Draw flat line when no data
-            if (isAnimating) {
-                drawIdleWaveform(canvas, width, height)
-            }
+        if (dataPoints.isEmpty() || !isAnimating) {
+            // Draw flat baseline when not animating
+            canvas.drawLine(0f, centerY, w, centerY, waveformPaint.apply { alpha = 100 })
+            waveformPaint.alpha = 255
             return
         }
 
-        // Build waveform path
+        // Build waveform path from data points
         path.reset()
         glowPath.reset()
 
-        val pointSpacing = width / maxDataPoints
-        var firstPoint = true
+        val pointSpacing = w / maxDataPoints
 
         for (i in dataPoints.indices) {
             val x = i * pointSpacing
-            val y = centerY - (dataPoints[i] * height * 0.4f)
+            val y = centerY - (dataPoints[i] * amplitude)
 
-            if (firstPoint) {
+            if (i == 0) {
                 path.moveTo(x, y)
                 glowPath.moveTo(x, y)
-                firstPoint = false
             } else {
                 path.lineTo(x, y)
                 glowPath.lineTo(x, y)
             }
         }
 
-        // Draw glow effect first
+        // Draw glow effect first (behind)
         canvas.drawPath(glowPath, glowPaint)
 
         // Draw main waveform
         canvas.drawPath(path, waveformPaint)
-
-        // Auto-add baseline points when animating
-        if (isAnimating) {
-            val currentTime = System.currentTimeMillis()
-            if (currentTime - lastBeatTime > beatInterval * 0.8f) {
-                // Add baseline points between beats
-                dataPoints.add(0f)
-                if (dataPoints.size > maxDataPoints) {
-                    dataPoints.removeAt(0)
-                }
-            }
-            postInvalidateDelayed(33) // ~30 FPS
-        }
     }
 
     private fun drawGrid(canvas: Canvas, width: Float, height: Float) {
@@ -175,37 +183,10 @@ class ECGWaveformView @JvmOverloads constructor(
         }
 
         // Horizontal lines
-        val hSpacing = height / 6
-        for (i in 0..6) {
+        val hSpacing = height / 4
+        for (i in 0..4) {
             val y = i * hSpacing
             canvas.drawLine(0f, y, width, y, gridPaint)
         }
-    }
-
-    private fun drawIdleWaveform(canvas: Canvas, width: Float, height: Float) {
-        val centerY = height / 2
-
-        // Draw subtle animated baseline
-        path.reset()
-        path.moveTo(0f, centerY)
-
-        for (i in 0..width.toInt() step 4) {
-            val x = i.toFloat()
-            val wave = sin((x + offset) * 0.02f) * 2f
-            path.lineTo(x, centerY + wave)
-        }
-
-        canvas.drawPath(path, waveformPaint.apply { alpha = 100 })
-        waveformPaint.alpha = 255
-
-        offset += 2f
-        if (offset > 1000f) offset = 0f
-
-        postInvalidateDelayed(33)
-    }
-
-    fun clearData() {
-        dataPoints.clear()
-        invalidate()
     }
 }
