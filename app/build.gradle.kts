@@ -6,14 +6,14 @@ plugins {
 
 android {
     namespace = "com.maenmax.heartratemonitor"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.maenmax.heartratemonitor"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 3
-        versionName = "2.1"
+        targetSdk = 35
+        versionCode = 4
+        versionName = "2.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
