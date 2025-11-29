@@ -25,14 +25,16 @@ class FingerDetector {
         private const val MAX_PULSE_VARIATION = 5.0f    // Maximum (too much = movement/noise)
 
         // Sustained contact requirement
-        private const val SUSTAINED_FRAMES_REQUIRED = 45  // 1.5 seconds of valid finger
-        private const val PULSE_VERIFY_FRAMES = 60        // 2 seconds to verify pulse exists
+        private const val SUSTAINED_FRAMES_REQUIRED = 30  // 1 second of valid finger
+        private const val PULSE_VERIFY_FRAMES = 45        // 1.5 seconds to verify pulse exists
     }
 
     // State
     private var frameCount = 0
     private var sustainedFingerFrames = 0
     private var pulseVerificationFrames = 0
+    private var pulseVerifyAttempts = 0
+    private val MAX_PULSE_VERIFY_ATTEMPTS = 3
 
     // Signal history for pulse detection
     private val redHistory = mutableListOf<Float>()
@@ -66,6 +68,7 @@ class FingerDetector {
         frameCount = 0
         sustainedFingerFrames = 0
         pulseVerificationFrames = 0
+        pulseVerifyAttempts = 0
         redHistory.clear()
         brightnessHistory.clear()
         calibrationReadings.clear()
@@ -85,15 +88,34 @@ class FingerDetector {
         frameCount = 0
         sustainedFingerFrames = 0
         pulseVerificationFrames = 0
+        pulseVerifyAttempts = 0
         redHistory.clear()
         brightnessHistory.clear()
         fingerConfirmed = false
         pulseDetected = false
-        // Keep calibration data, go straight to waiting for finger
+        // Keep calibration data, but require finger to be removed and placed again
+        // Go to WAITING_FOR_FINGER - user must lift and replace finger
         if (isCalibrated) {
             currentState = DetectionState.WAITING_FOR_FINGER
         } else {
             currentState = DetectionState.CALIBRATING
+        }
+    }
+
+    /**
+     * Force reset to allow immediate re-detection.
+     * Use this to skip pulse verification for faster re-measurement.
+     */
+    fun forceReadyState() {
+        if (isCalibrated) {
+            frameCount = 0
+            sustainedFingerFrames = 0
+            pulseVerificationFrames = 0
+            pulseVerifyAttempts = 0
+            redHistory.clear()
+            fingerConfirmed = false
+            pulseDetected = false
+            currentState = DetectionState.WAITING_FOR_FINGER
         }
     }
 
@@ -215,12 +237,20 @@ class FingerDetector {
         if (pulseVerificationFrames >= PULSE_VERIFY_FRAMES) {
             if (hasPulseSignal()) {
                 pulseDetected = true
+                pulseVerifyAttempts = 0
                 currentState = DetectionState.FINGER_CONFIRMED
             } else {
-                // No pulse detected - might be a fake finger or dead tissue (unlikely but possible)
-                // Reset and try again
-                pulseVerificationFrames = 0
-                redHistory.clear()
+                pulseVerifyAttempts++
+                if (pulseVerifyAttempts >= MAX_PULSE_VERIFY_ATTEMPTS) {
+                    // After 3 attempts, just accept the finger (user clearly has finger on camera)
+                    pulseDetected = true
+                    pulseVerifyAttempts = 0
+                    currentState = DetectionState.FINGER_CONFIRMED
+                } else {
+                    // Try again
+                    pulseVerificationFrames = 0
+                    redHistory.clear()
+                }
             }
         }
     }

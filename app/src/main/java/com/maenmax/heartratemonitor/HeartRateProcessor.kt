@@ -27,13 +27,13 @@ class HeartRateProcessor {
     private var lastPeakTime: Long = 0
     private var measuredFPS: Float = 30f
 
-    // Beat detection state
-    private var isInBeat = false
-    private var beatThreshold = 0f
-    private var signalBaseline = 0f
-    private var peakValue = Float.MIN_VALUE
-    private var troughValue = Float.MAX_VALUE
-    private var beatDetectedFlag = false  // Flag for synchronized beat detection
+    // Beat detection state - PEAK-based detection for sync with visible blood volume changes
+    private var beatDetectedFlag = false
+    private val recentSamples = mutableListOf<Float>()  // Rolling window of recent samples
+    private val SAMPLE_WINDOW = 15  // ~500ms at 30fps - enough to see a full beat
+    private var lastBeatTimestamp = 0L
+    private var runningMin = Float.MAX_VALUE
+    private var runningMax = Float.MIN_VALUE
 
     // Callback for when a real beat is detected
     var onBeatDetected: (() -> Unit)? = null
@@ -46,12 +46,11 @@ class HeartRateProcessor {
         lastBPMUpdateTime = 0
         recentBPMReadings.clear()
         lastPeakTime = 0
-        isInBeat = false
-        beatThreshold = 0f
-        signalBaseline = 0f
-        peakValue = Float.MIN_VALUE
-        troughValue = Float.MAX_VALUE
         beatDetectedFlag = false
+        recentSamples.clear()
+        lastBeatTimestamp = 0L
+        runningMin = Float.MAX_VALUE
+        runningMax = Float.MIN_VALUE
     }
 
     /**
@@ -63,50 +62,68 @@ class HeartRateProcessor {
 
     /**
      * Process a new signal sample and detect beats in real-time.
-     * Call this for every frame during measurement.
-     * Does NOT invoke callback - use checkAndConsumeBeat() on UI thread instead.
+     * Uses PEAK DETECTION to sync with the actual visible blood volume change.
+     *
+     * The beat is triggered at the PEAK of the red intensity wave - this is
+     * exactly when you see the color change (blood volume maximum).
      *
      * @param signalValue The current red channel intensity
      * @param timestamp Current time in milliseconds
      * @return true if a beat was detected on this sample
      */
     fun processSample(signalValue: Float, timestamp: Long): Boolean {
-        // Update signal range tracking
-        if (signalValue > peakValue) peakValue = signalValue
-        if (signalValue < troughValue) troughValue = signalValue
+        // Add to rolling window
+        recentSamples.add(signalValue)
+        if (recentSamples.size > SAMPLE_WINDOW) {
+            recentSamples.removeAt(0)
+        }
 
-        val signalRange = peakValue - troughValue
-        if (signalRange < 0.5f) return false  // Lowered - detect even subtle variations
+        // Need enough samples to detect a peak
+        if (recentSamples.size < SAMPLE_WINDOW) return false
 
-        // Calculate adaptive threshold - MORE SENSITIVE for subtle pulses
-        // Baseline at 45%, threshold at 55% = only 10% hysteresis (was 20%)
-        signalBaseline = troughValue + signalRange * 0.45f
-        beatThreshold = troughValue + signalRange * 0.55f
+        // Update running min/max for signal range
+        if (signalValue > runningMax) runningMax = signalValue
+        if (signalValue < runningMin) runningMin = signalValue
 
-        // Faster decay to adapt quickly to signal changes
-        peakValue -= signalRange * 0.003f
-        troughValue += signalRange * 0.003f
+        // Slowly adapt the range
+        val range = runningMax - runningMin
+        if (range > 0.5f) {
+            runningMax -= range * 0.001f
+            runningMin += range * 0.001f
+        }
 
-        // Beat detection state machine
-        var beatDetected = false
+        // Need minimum signal variation
+        if (range < 0.8f) return false
 
-        if (!isInBeat && signalValue > beatThreshold) {
-            // Rising edge - potential beat start
-            isInBeat = true
-        } else if (isInBeat && signalValue < signalBaseline) {
-            // Falling edge - beat complete
-            isInBeat = false
+        // Check if the sample in the MIDDLE of our window is a LOCAL MAXIMUM
+        // This means we're detecting the peak with a small delay, but it's accurate
+        val midIndex = SAMPLE_WINDOW / 2
+        val midSample = recentSamples[midIndex]
 
-            // Check timing - must be at least 333ms since last beat (max 180 BPM)
-            val timeSinceLastBeat = timestamp - lastPeakTime
-            if (timeSinceLastBeat >= 333) {
-                lastPeakTime = timestamp
-                beatDetected = true
-                beatDetectedFlag = true  // Set flag for UI thread to consume
+        // The middle sample must be higher than all surrounding samples (true peak)
+        var isPeak = true
+        for (i in 0 until SAMPLE_WINDOW) {
+            if (i != midIndex && recentSamples[i] >= midSample) {
+                isPeak = false
+                break
             }
         }
 
-        return beatDetected
+        if (!isPeak) return false
+
+        // Peak must be in upper 40% of signal range (not noise at the bottom)
+        val threshold = runningMin + range * 0.6f
+        if (midSample < threshold) return false
+
+        // Timing check - minimum 450ms between beats (max ~133 BPM)
+        val timeSinceLastBeat = timestamp - lastBeatTimestamp
+        if (timeSinceLastBeat < 450) return false
+
+        // Valid beat detected at peak!
+        lastBeatTimestamp = timestamp
+        lastPeakTime = timestamp
+        beatDetectedFlag = true
+        return true
     }
 
     /**

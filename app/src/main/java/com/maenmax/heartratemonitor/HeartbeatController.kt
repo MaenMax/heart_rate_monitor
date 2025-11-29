@@ -116,7 +116,10 @@ class HeartbeatController(
         if (!isMuted && isSoundReady) {
             audioTrack?.let { track ->
                 try {
-                    track.stop()
+                    // Only stop if currently playing to avoid IllegalStateException
+                    if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                        track.stop()
+                    }
                     track.reloadStaticData()
                     track.play()
                 } catch (e: Exception) {

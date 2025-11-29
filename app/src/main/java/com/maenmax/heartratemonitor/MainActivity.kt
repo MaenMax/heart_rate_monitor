@@ -530,17 +530,28 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun smoothSignal(signal: List<Float>): List<Float> {
-        // Apply bandpass filter for heart rate detection (0.5 - 4 Hz for 30-240 BPM)
-        // Step 1: Remove DC component and low-frequency drift (high-pass)
-        val detrended = removeTrend(signal)
+        // Safety check - return empty if signal is too short
+        if (signal.size < 10) return signal.toList()
 
-        // Step 2: Apply low-pass filter to remove high-frequency noise
-        val lowPassed = lowPassFilter(detrended, cutoffFrames = 5)  // ~6Hz cutoff at 30fps
+        try {
+            // Make a copy to avoid concurrent modification
+            val signalCopy = signal.toList()
 
-        // Step 3: Apply smoothing for cleaner peaks
-        val smoothed = movingAverageFilter(lowPassed, windowSize = 5)
+            // Apply bandpass filter for heart rate detection (0.5 - 4 Hz for 30-240 BPM)
+            // Step 1: Remove DC component and low-frequency drift (high-pass)
+            val detrended = removeTrend(signalCopy)
 
-        return smoothed
+            // Step 2: Apply low-pass filter to remove high-frequency noise
+            val lowPassed = lowPassFilter(detrended, cutoffFrames = 5)  // ~6Hz cutoff at 30fps
+
+            // Step 3: Apply smoothing for cleaner peaks
+            val smoothed = movingAverageFilter(lowPassed, windowSize = 5)
+
+            return smoothed
+        } catch (e: Exception) {
+            // Return original signal if processing fails
+            return signal.toList()
+        }
     }
 
     private fun removeTrend(signal: List<Float>): List<Float> {
